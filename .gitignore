@@ -1,0 +1,29 @@
+# Environments
+venv/
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# IDEs
+.vscode/
+.idea/
+
+# Binaries
+*.exe
+*.spec
+dist/
+build/
+
+# Documents (keep readme/instructions)
+# *.docx
+# *.pdf
+
+# Specific ignores
+Kiwiscribe.exe
+test_output.txt
+test_output_clean.txt
+test_output_large.txt

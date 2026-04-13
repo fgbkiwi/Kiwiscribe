@@ -1,0 +1,36 @@
+# Core GUI Framework
+PyQt6>=6.9.1
+
+# AI/ML APIs
+assemblyai>=0.41.5
+anthropic>=0.54.0
+openai>=1.90.0
+google-genai>=0.8.3
+
+# Google Cloud dependencies
+google-api-core>=2.25.1
+google-auth>=2.40.3
+google-auth-httplib2>=0.2.0
+google-api-python-client>=2.173.0
+# Ensure compatible dependency versions
+# protobuf: grpcio-status requires >=6.31.1,<7.0.0
+protobuf>=6.31.1,<7.0.0
+cachetools<6.0,>=5.5.2
+
+# PDF processing
+PyPDF2>=3.0.1
+pypdf>=5.6.1
+
+# HTTP requests
+requests>=2.32.4
+
+# Soniox integration: SDK oficial (recomendado) + fallback REST
+soniox>=0.4.0
+
+# Other utilities
+colorama>=0.4.6
+tqdm>=4.67.1
+distro>=1.9.0
+
+# Build tool
+pyinstaller>=6.0.0
