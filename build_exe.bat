@@ -10,7 +10,9 @@ SET "PYTHON_EXE=python"
 SET "VENV_PATH="
 
 REM --- Find and Activate Virtual Environment ---
-if exist "venv\Scripts\activate.bat" (
+if exist "venv_win\Scripts\activate.bat" (
+    SET "VENV_PATH=venv_win"
+) else if exist "venv\Scripts\activate.bat" (
     SET "VENV_PATH=venv"
 ) else if exist "venv2\Scripts\activate.bat" (
     SET "VENV_PATH=venv2"
