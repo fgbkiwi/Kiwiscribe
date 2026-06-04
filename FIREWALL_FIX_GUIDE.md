@@ -33,7 +33,7 @@ atual):
 $basePath = Join-Path $env:USERPROFILE `
     "OneDrive - NetJus\Dev\PythonApps"
 $pythonPath = Join-Path $basePath `
-    "Kiwiscribe\venv\Scripts\python.exe"
+    "Kiwiscribe\venv_win\Scripts\python.exe"
 
 New-NetFirewallRule -DisplayName "Python Kiwiscribe Allow Outbound" `
     -Direction Outbound `
@@ -53,7 +53,7 @@ o que o Python e a biblioteca do Google rejeitam por segurança.
 3. Adicione uma exceção para o executável do Python (ajuste o caminho):
 
     ```text
-    C:\caminho\para\Kiwiscribe\venv\Scripts\python.exe
+    C:\caminho\para\Kiwiscribe\venv_win\Scripts\python.exe
     ```
 
 4. Ou desative temporariamente a verificação de HTTPS/SSL (não a proteção de arquivos)

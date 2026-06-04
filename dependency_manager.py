@@ -9,8 +9,25 @@ are not affected.
 import json
 import subprocess
 import sys
-from packaging.requirements import Requirement
-from packaging.version import Version
+
+try:
+    from packaging.requirements import Requirement
+    from packaging.version import InvalidVersion, Version
+except ModuleNotFoundError:
+    print("'packaging' is missing. Installing it now...", file=sys.stderr)
+    try:
+        subprocess.run(
+            [sys.executable, '-m', 'pip', 'install', 'packaging'],
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding='utf-8'
+        )
+        from packaging.requirements import Requirement
+        from packaging.version import InvalidVersion, Version
+    except Exception as e:
+        print(f"Error: Failed to install required dependency 'packaging': {e}", file=sys.stderr)
+        sys.exit(1)
 
 # ==============================================================================
 # CONFIGURATION
@@ -150,12 +167,18 @@ def check_dependencies():
             status = "[NOT FOUND]"
             conflicts.append(f"{req.name} is not installed.")
         else:
-            installed_version = Version(installed_version_str)
-            if installed_version not in req.specifier:
-                status = "[CONFLICT]"
+            try:
+                installed_version = Version(installed_version_str)
+                if installed_version not in req.specifier:
+                    status = "[CONFLICT]"
+                    conflicts.append(
+                        f"Conflict for {req.name}: Version {installed_version} is installed, "
+                        f"but requirement is '{specifier}'."
+                    )
+            except InvalidVersion:
+                status = "[UNKNOWN VERSION]"
                 conflicts.append(
-                    f"Conflict for {req.name}: Version {installed_version} is installed, "
-                    f"but requirement is '{specifier}'."
+                    f"Could not validate version for {req.name}: '{installed_version_str}' is not PEP 440 compliant."
                 )
         
         print(f"{req.name:<35} {str(req.specifier):<20} {installed_version_str or 'N/A':<15} {status:<10}")
@@ -320,7 +343,20 @@ def update_packages():
                 [sys.executable, '-m', 'pip', 'install'] + all_critical_packages,
                 check=True
             )
-            print("\n[OK] Packages updated successfully!")
+            check_result = subprocess.run(
+                [sys.executable, '-m', 'pip', 'check'],
+                capture_output=True,
+                text=True,
+                encoding='utf-8'
+            )
+            if check_result.returncode == 0:
+                print("\n[OK] Packages updated successfully and no dependency conflicts were reported by pip check.")
+            else:
+                print("\n[WARNING] Packages updated, but pip check reported dependency issues:")
+                if check_result.stdout.strip():
+                    print(check_result.stdout.strip())
+                if check_result.stderr.strip():
+                    print(check_result.stderr.strip(), file=sys.stderr)
         except subprocess.CalledProcessError as e:
             print(f"\n[ERROR] Pip install command failed with exit code {e.returncode}", file=sys.stderr)
             print("Some packages may have been upgraded but constraints may not be met.", file=sys.stderr)

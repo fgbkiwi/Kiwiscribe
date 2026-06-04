@@ -20,7 +20,7 @@ O script mapeia automaticamente os canais de áudio para os papéis judiciais:
 
 ### Software
 
-- Python 3.8+ com ambiente virtual ativado
+- Python 3.13 com ambiente virtual ativado
 - Dependências instaladas (PyQt6, assemblyai, etc.)
 - ffprobe (para validação de canais de áudio)
 
@@ -41,7 +41,7 @@ O script mapeia automaticamente os canais de áudio para os papéis judiciais:
 
 ```bash
 # Ativar ambiente virtual
-.\venv\Scripts\activate
+.\venv_win\Scripts\activate
 
 # Executar o script
 python KiwiscribeMulti.py
@@ -142,6 +142,12 @@ O script identifica automaticamente a sequência de depoentes na ata:
 - **Transcrição**: `{nome_audio}_transcricao_multicanal_{timestamp}.txt`
 - **Localização**: Pasta de Downloads do usuário
 - **Formato**: Texto com timestamps e identificação por canal
+
+## Lembrete de Ambiente por Plataforma
+
+- No Windows, este projeto usa `venv_win` e o script `update_deps_win.bat` para atualização de dependências.
+- Ao trabalhar no Linux, crie um ambiente virtual separado (por exemplo, `.venv_linux`) e um script de atualização próprio (por exemplo, `update_deps_linux.sh`).
+- Não reutilize o mesmo ambiente virtual entre Windows e Linux.
 
 ## Suporte
 

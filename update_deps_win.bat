@@ -1,5 +1,5 @@
 @echo off
-echo Checking for potential dependency conflicts before updating packages...
+echo Running Kiwiscribe Safe Dependency Update...
 echo.
 
 REM Activate the virtual environment
@@ -14,13 +14,14 @@ if errorlevel 1 (
 	exit /b 1
 )
 
-REM Run the Python script to check for conflicts
-python dependency_manager.py check
+REM Run the dependency manager to update packages
+python dependency_manager.py update
 if errorlevel 1 (
 	echo.
-	echo [ERROR] Dependency check failed.
+	echo [ERROR] Dependency update failed.
 	exit /b 1
 )
 
 echo.
+echo Update process finished.
 pause

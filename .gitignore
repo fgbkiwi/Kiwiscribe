@@ -1,5 +1,7 @@
 # Environments
 venv/
+venv_win/
+venv_local/
 .env
 
 # Python

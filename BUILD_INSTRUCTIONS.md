@@ -5,7 +5,7 @@ Python application with a custom icon and no terminal window.
 
 ## Prerequisites
 
-1. **Python 3.8+** installed on your system
+1. **Python 3.13** installed on your system
 2. **Virtual environment** (recommended)
 3. **All dependencies** installed
 
@@ -110,7 +110,7 @@ This script will:
 4. **Build fails with virtual environment**
 
    - Make sure you're in the correct virtual environment
-   - Try: `venv_local\Scripts\activate.bat` or `venv2\Scripts\activate.bat`
+   - Try: `venv_win\Scripts\activate.bat`
 
 5. **Application doesn't start**
 
@@ -124,7 +124,7 @@ If the automated build fails, you can debug manually:
 
 ```cmd
 # Activate virtual environment
-venv_local\Scripts\activate.bat
+venv_win\Scripts\activate.bat
 
 # Install PyInstaller
 pip install pyinstaller
@@ -167,6 +167,12 @@ The final `Kiwiscribe.exe` file is completely standalone and can be:
 - **Startup Time**: First launch may be slower as files are extracted
 - **Antivirus**: Some antivirus software may flag PyInstaller executables
 - **Updates**: Rebuild the executable when you update your Python code
+
+### Cross-Platform Dependency Update Reminder
+
+- Windows workflow in this repo uses `venv_win` and `update_deps_win.bat`.
+- When working from Linux, create a separate Linux virtual environment (for example, `.venv_linux`) and a dedicated update script (for example, `update_deps_linux.sh`).
+- Do not share one virtual environment between Windows and Linux.
 
 ## Support
 
