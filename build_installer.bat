@@ -5,6 +5,8 @@ echo ========================================
 echo Building Kiwiscribe Windows Installer
 echo ========================================
 
+rem Default to failure; only the verified-success path sets this to 0.
+set "BUILD_RC=1"
 set "PYTHON_EXE=python"
 set "VENV_PATH="
 set "ICON_SRC=KiwiScribeSquared.png"
@@ -84,7 +86,18 @@ echo Running pynsist...
 if errorlevel 1 (
     echo.
     echo ERROR: pynsist failed to build the installer.
-    goto :cleanup
+    goto :error_exit
+)
+
+rem pynsist returns 0 even when its makensis subprocess fails (e.g. "Bad text
+rem encoding"), so confirm the installer .exe was actually produced. build\nsis is
+rem wiped before this run, so any .exe present here is from the current build.
+echo Verifying installer output...
+if not exist "build\nsis\*.exe" (
+    echo.
+    echo ERROR: No installer .exe was produced in build\nsis.
+    echo makensis likely failed - check the output above ^(e.g. "Bad text encoding"^).
+    goto :error_exit
 )
 
 echo.
@@ -92,11 +105,13 @@ echo ========================================
 echo INSTALLER BUILD SUCCESSFUL!
 echo ========================================
 echo Installer output is in build\nsis
+set "BUILD_RC=0"
 goto :cleanup
 
 :error_exit
 echo.
 echo Installer build aborted due to an error.
+set "BUILD_RC=1"
 
 :cleanup
 if exist "installer_wheels" rmdir /s /q "installer_wheels"
@@ -104,4 +119,4 @@ if exist "installer_wheels" rmdir /s /q "installer_wheels"
 echo.
 echo Press any key to exit...
 pause >nul
-endlocal
+endlocal & exit /b %BUILD_RC%

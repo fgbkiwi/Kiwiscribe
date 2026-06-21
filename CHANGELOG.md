@@ -9,6 +9,8 @@
   (antes ausentes, o que desabilitava a geração de DOCX na versão instalada).
 - Template de degravação renomeado para `Degravacao_script.docx` (nome ASCII) para evitar
   falha de codificação do NSIS; `KiwiscribeWord.py` aceita o nome antigo como fallback.
+- `build_installer.bat`: passa a verificar se o `.exe` foi realmente gerado (o pynsist
+  retornava 0 mesmo quando o makensis falhava) e propaga código de saída não-zero em falhas.
 
 - Corrigida a transcrição via OpenRouter: substituído o endpoint `/audio/transcriptions`
   (multipart, rejeitado com `invalid content-type`) pelo endpoint `/chat/completions`
