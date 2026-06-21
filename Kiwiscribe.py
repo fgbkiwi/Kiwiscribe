@@ -1458,36 +1458,29 @@ class TranscriptionWindow(QMainWindow):
         main_layout.setSpacing(15)
         main_layout.setContentsMargins(20, 20, 20, 20)
 
-        # Logo no canto superior direito da janela principal.
-        header_layout = QHBoxLayout()
-        header_layout.setContentsMargins(0, 0, 0, 0)
-        header_layout.addStretch()
-        if os.path.exists(self.logo_image_path):
-            logo_label = QLabel()
-            logo_pixmap = QPixmap(self.logo_image_path)
-            if not logo_pixmap.isNull():
-                logo_label.setPixmap(
-                    logo_pixmap.scaled(
-                        96,
-                        96,
-                        Qt.AspectRatioMode.KeepAspectRatio,
-                        Qt.TransformationMode.SmoothTransformation,
-                    )
-                )
-                logo_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
-                logo_label.setToolTip("KiwiScribe")
-                header_layout.addWidget(logo_label)
-        main_layout.addLayout(header_layout)
-
         controls_widget = QWidget()
         controls_layout = QVBoxLayout(controls_widget)
         controls_layout.setSpacing(10)
         controls_layout.setContentsMargins(0,0,0,0)
 
+        top_section_widget = QWidget()
+        top_section_layout = QHBoxLayout(top_section_widget)
+        top_section_layout.setContentsMargins(0, 0, 0, 0)
+        top_section_layout.setSpacing(10)
+
+        left_section_widget = QWidget()
+        left_section_layout = QVBoxLayout(left_section_widget)
+        left_section_layout.setContentsMargins(0, 0, 0, 0)
+        left_section_layout.setSpacing(2)
+
         # --- 1. Serviço de Transcrição --- MODIFICADO
         service_group = QWidget()
-        service_layout = QHBoxLayout(service_group)
-        service_layout.setContentsMargins(0,0,0,0)
+        service_group_layout = QVBoxLayout(service_group)
+        service_group_layout.setContentsMargins(0, 0, 0, 0)
+        service_group_layout.setSpacing(2)
+
+        service_layout = QHBoxLayout()
+        service_layout.setContentsMargins(0, 0, 0, 0)
         service_label = QLabel("<b>1. Serviço de Transcrição:</b>")
         self.service_assembly = QRadioButton("AssemblyAI")
         self.service_openai = QRadioButton("Open AI")
@@ -1502,21 +1495,46 @@ class TranscriptionWindow(QMainWindow):
         service_layout.addWidget(self.service_soniox)
         service_layout.addWidget(self.service_just_post_process) # Adicionado à UI
         service_layout.addStretch()
-        controls_layout.addWidget(service_group)
+        service_group_layout.addLayout(service_layout)
 
         transcription_model_group = QHBoxLayout()
-        transcription_model_group.setContentsMargins(0, 0, 0, 0)
+        transcription_model_group.setContentsMargins(22, 0, 0, 0)
         transcription_model_label = QLabel("Modelo de transcrição:")
         self.transcription_model_combo = QComboBox()
         self.transcription_model_combo.setToolTip("Lista filtrada para modelos/serviços capazes de trabalhar com áudio ou transcrição local.")
-        self.refresh_transcription_models_btn = QPushButton("Atualizar modelos")
-        self.refresh_transcription_models_btn.setToolTip("Consulta o provedor selecionado em tempo real e atualiza a lista de modelos de transcrição.")
-        self.refresh_transcription_models_btn.clicked.connect(lambda: self._refresh_model_combos(fetch_remote=True, target='transcription'))
         transcription_model_group.addWidget(transcription_model_label)
         transcription_model_group.addWidget(self.transcription_model_combo)
-        transcription_model_group.addWidget(self.refresh_transcription_models_btn)
         transcription_model_group.addStretch()
-        controls_layout.addLayout(transcription_model_group)
+        service_group_layout.addLayout(transcription_model_group)
+        left_section_layout.addWidget(service_group)
+
+        logo_panel = QWidget()
+        logo_panel_layout = QVBoxLayout(logo_panel)
+        logo_panel_layout.setContentsMargins(0, 0, 0, 0)
+        logo_panel_layout.setSpacing(0)
+        logo_panel.setFixedWidth(110)
+
+        logo_panel_layout.addStretch()
+        if os.path.exists(self.logo_image_path):
+            top_logo_label = QLabel()
+            top_logo_pixmap = QPixmap(self.logo_image_path)
+            if not top_logo_pixmap.isNull():
+                top_logo_label.setPixmap(
+                    top_logo_pixmap.scaled(
+                        92,
+                        92,
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
+                )
+                top_logo_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                top_logo_label.setToolTip("KiwiScribe")
+                logo_panel_layout.addWidget(top_logo_label)
+        logo_panel_layout.addStretch()
+
+        top_section_layout.addWidget(left_section_widget, 1)
+        top_section_layout.addWidget(logo_panel, 0)
+        controls_layout.addWidget(top_section_widget)
 
         # --- 2. Arquivos de Entrada ---
         # (Layout mantido como antes)
@@ -1712,12 +1730,8 @@ class TranscriptionWindow(QMainWindow):
         post_model_label = QLabel("Modelo de pós-processamento:")
         self.post_model_combo = QComboBox()
         self.post_model_combo.setToolTip("Modelo de texto usado para identificar interlocutores e aplicar as informações da ata.")
-        self.refresh_post_models_btn = QPushButton("Atualizar modelos")
-        self.refresh_post_models_btn.setToolTip("Consulta o provedor selecionado em tempo real e atualiza a lista de modelos de pós-processamento.")
-        self.refresh_post_models_btn.clicked.connect(lambda: self._refresh_model_combos(fetch_remote=True, target='post'))
         post_model_group.addWidget(post_model_label)
         post_model_group.addWidget(self.post_model_combo)
-        post_model_group.addWidget(self.refresh_post_models_btn)
         post_model_group.addStretch()
         controls_layout.addLayout(post_model_group)
 
@@ -1756,17 +1770,19 @@ class TranscriptionWindow(QMainWindow):
         self.current_log_file = None
         self.current_run_suffix = ""
         self.model_cache = {}
+        self._last_transcription_provider = None
+        self._last_post_provider = None
 
         # --- Conectar sinais aos slots --- MODIFICADO
-        self.service_assembly.toggled.connect(self.update_ui_visibility)
-        self.service_openai.toggled.connect(self.update_ui_visibility)
-        self.service_gemini.toggled.connect(self.update_ui_visibility)
-        self.service_soniox.toggled.connect(self.update_ui_visibility)
-        self.service_just_post_process.toggled.connect(self.update_ui_visibility) # Conectado 'Apenas Pós-processar'
-        self.use_claude_radio.toggled.connect(self.update_ui_visibility)
-        self.use_openai_radio.toggled.connect(self.update_ui_visibility)
-        self.use_gemini_radio.toggled.connect(self.update_ui_visibility)
-        self.use_none_radio.toggled.connect(self.update_ui_visibility)
+        self.service_assembly.toggled.connect(self._on_transcription_provider_toggled)
+        self.service_openai.toggled.connect(self._on_transcription_provider_toggled)
+        self.service_gemini.toggled.connect(self._on_transcription_provider_toggled)
+        self.service_soniox.toggled.connect(self._on_transcription_provider_toggled)
+        self.service_just_post_process.toggled.connect(self._on_transcription_provider_toggled)
+        self.use_claude_radio.toggled.connect(self._on_post_provider_toggled)
+        self.use_openai_radio.toggled.connect(self._on_post_provider_toggled)
+        self.use_gemini_radio.toggled.connect(self._on_post_provider_toggled)
+        self.use_none_radio.toggled.connect(self._on_post_provider_toggled)
         self.transcription_model_combo.currentIndexChanged.connect(self.update_ui_visibility)
         self.post_model_combo.currentIndexChanged.connect(self.update_ui_visibility)
         self.api_key_openai_transcription_input.editingFinished.connect(
@@ -1788,6 +1804,10 @@ class TranscriptionWindow(QMainWindow):
         self.update_ui_visibility() # Inicializar visibilidade
         # Carregar configurações salvas (última sessão)
         self.load_settings()
+        # Atualiza modelos automaticamente no início para os provedores selecionados.
+        self._refresh_model_combos(fetch_remote=True)
+        self._last_transcription_provider = self._current_transcription_service()
+        self._last_post_provider = self._current_post_provider()
 
     def _on_speaker_identification_toggled(self, state):
         """Ao marcar Speaker Identification, seleciona automaticamente 'Nenhum (Apenas Transcrever)' no pós-processamento."""
@@ -1897,6 +1917,19 @@ class TranscriptionWindow(QMainWindow):
             models.append(name)
         return [(m, m) for m in sorted(set(models))]
 
+    def _build_model_refresh_error_message(self, provider, error):
+        if isinstance(error, requests.exceptions.ConnectionError):
+            return (
+                f"❌ Sem conexão com a internet: não foi possível consultar modelos em tempo real de {provider}. "
+                "Verifique sua conexão e tente novamente."
+            )
+        if isinstance(error, requests.exceptions.Timeout):
+            return (
+                f"❌ Tempo de conexão esgotado ao consultar modelos de {provider}. "
+                "Verifique sua internet e tente novamente."
+            )
+        return f"⚠️ Falha ao atualizar modelos de {provider}: {error}."
+
     def _get_models_for_provider(self, provider, purpose, fetch_remote=False):
         cache_key = (provider, purpose)
         fallback = self._fallback_models(provider, purpose)
@@ -1927,7 +1960,7 @@ class TranscriptionWindow(QMainWindow):
             self.update_message_box(f"✅ {provider}: {len(models)} modelo(s) carregado(s) em tempo real.")
             return models
         except Exception as e:
-            self.update_message_box(f"⚠️ Falha ao atualizar modelos de {provider}: {e}. Usando lista local.")
+            self.update_message_box(f"{self._build_model_refresh_error_message(provider, e)} Usando lista local.")
             return fallback
 
     def _refresh_model_combos(self, fetch_remote=False, target=None):
@@ -1943,6 +1976,24 @@ class TranscriptionWindow(QMainWindow):
                 self.post_model_combo,
                 self._get_models_for_provider(post_provider, 'post', fetch_remote=fetch_remote),
             )
+
+    def _on_transcription_provider_toggled(self, checked):
+        self.update_ui_visibility()
+        if not checked:
+            return
+        current_provider = self._current_transcription_service()
+        if current_provider != self._last_transcription_provider:
+            self._refresh_model_combos(fetch_remote=True, target='transcription')
+            self._last_transcription_provider = current_provider
+
+    def _on_post_provider_toggled(self, checked):
+        self.update_ui_visibility()
+        if not checked:
+            return
+        current_provider = self._current_post_provider()
+        if current_provider != self._last_post_provider:
+            self._refresh_model_combos(fetch_remote=True, target='post')
+            self._last_post_provider = current_provider
 
     def _selected_transcription_model(self):
         return self.transcription_model_combo.currentData() or self._get_transcription_model_tag(self._current_transcription_service())
@@ -2072,8 +2123,6 @@ class TranscriptionWindow(QMainWindow):
         is_openai_post = self.use_openai_radio.isChecked()
         is_gemini_post = self.use_gemini_radio.isChecked()
         is_no_post = self.use_none_radio.isChecked()
-
-        self._refresh_model_combos()
 
         # Visibilidade Nº Interlocutores (só AssemblyAI)
         self.num_container.setVisible(is_assembly_service)
