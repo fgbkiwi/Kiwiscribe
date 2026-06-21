@@ -549,13 +549,22 @@ def generate_word_document(transcript_path, ata_pdf_path=None, output_dir=None, 
     log("Segmentação concluída!")
 
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    template_path = os.path.join(script_dir, "Degravação_script.docx")
-    if not os.path.exists(template_path):
-        template_path = "Degravação_script.docx"
-        if not os.path.exists(template_path):
-            raise FileNotFoundError(
-                f"Template Degravação_script.docx não encontrado em {script_dir} ou no diretório atual."
-            )
+    # Nome ASCII é o oficial (evita problemas de codificação no instalador NSIS);
+    # o nome antigo com acentos é mantido como fallback para setups existentes.
+    template_names = ["Degravacao_script.docx", "Degravação_script.docx"]
+    template_path = None
+    for base_dir in (script_dir, "."):
+        for name in template_names:
+            candidate = os.path.join(base_dir, name)
+            if os.path.exists(candidate):
+                template_path = candidate
+                break
+        if template_path:
+            break
+    if not template_path:
+        raise FileNotFoundError(
+            f"Template Degravacao_script.docx não encontrado em {script_dir} ou no diretório atual."
+        )
 
     log(f"Usando template: {template_path}")
     doc = docx.Document(template_path)

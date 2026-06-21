@@ -3452,8 +3452,11 @@ Por favor, forneça uma transcrição completa e detalhada. Responda APENAS com 
                     num_interlocutors = int(num_interlocutors_str) if num_interlocutors_str.isdigit() else 0
                     effective_assembly_key = api_key_assembly if api_key_assembly else self.saved_keys.get('assembly_ai')
                     if not effective_assembly_key:
-                        effective_assembly_key = "3df027b3d3f0494287f65e04610d0a47"
-                        self.worker_signals.message.emit("ℹ️ Usando API Key padrão da AssemblyAI.")
+                        self.worker_signals.message.emit(
+                            "❌ Erro: API Key da AssemblyAI não configurada. "
+                            "Informe-a na interface ou no arquivo .transcription_config.json (campo 'assembly_ai')."
+                        )
+                        raise ValueError("API Key da AssemblyAI ausente.")
                     aai.settings.api_key = effective_assembly_key
 
                     self.worker_signals.message.emit(f"🗣️ Configurando AssemblyAI (Interlocutores: {'Automático' if num_interlocutors == 0 else num_interlocutors})...")
