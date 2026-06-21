@@ -46,6 +46,58 @@ def select_file_gui(title="Selecione o arquivo", filter_desc="Arquivos de texto 
         file_path = file_path[1:-1]
     return file_path
 
+def sanitize_foro_text(raw_foro):
+    """Limpa texto de foro removendo ruídos de classe/número processual."""
+    if not raw_foro:
+        return ""
+
+    foro = re.sub(r'\s+', ' ', raw_foro).strip()
+    foro = re.sub(r'\s*-\s*', '-', foro)
+
+    # Corta sufixos comuns de narrativa da ata.
+    foro = re.split(
+        r'\s+(?:realizou|audi[êe]ncia|relativa|sob|ata|processo|autos?)\b',
+        foro,
+        flags=re.IGNORECASE,
+    )[0].strip()
+
+    # Remove classe processual anexada ao foro (ex.: "- ATSum 0000227-51").
+    foro = re.sub(
+        r'\s*-\s*(?:ATSum|RTSum|ACum|Ação\s+Trabalhista|Proc\.?|Processo)\b.*$',
+        '',
+        foro,
+        flags=re.IGNORECASE,
+    ).strip()
+    foro = re.sub(
+        r'\s+(?:ATSum|RTSum|ACum)\s+\d{4,7}-\d{2}(?:\.\d{4}\.\d\.\d{2}\.\d{4})?',
+        '',
+        foro,
+        flags=re.IGNORECASE,
+    ).strip()
+    foro = re.sub(r'\b\d{4,7}-\d{2}(?:\.\d{4}\.\d\.\d{2}\.\d{4})?\b.*$', '', foro).strip()
+
+    # Mantém apenas caracteres válidos para nomes de cidades/foros.
+    foro = re.sub(r"[^A-Za-zÀ-ÖØ-öø-ÿ0-9\s\-.'/()]", ' ', foro)
+    foro = re.sub(r'\s+', ' ', foro).strip(' -.,')
+    return foro
+
+def is_valid_foro_text(foro):
+    """Valida foro para evitar preenchimento com lixo textual."""
+    if not foro:
+        return False
+
+    # Evita termos claramente processuais no valor final.
+    forbidden_patterns = [
+        r'\bATSum\b',
+        r'\bRTSum\b',
+        r'\bACum\b',
+        r'\bprocesso\b',
+        r'\bautos?\b',
+        r'\b\d{4,7}-\d{2}(?:\.\d{4}\.\d\.\d{2}\.\d{4})?\b',
+    ]
+    combined = re.compile('|'.join(forbidden_patterns), re.IGNORECASE)
+    return combined.search(foro) is None
+
 # Function to extract metadata from the hearing minutes PDF
 def extract_metadata_from_ata(pdf_path):
     metadata = {
@@ -84,10 +136,8 @@ def extract_metadata_from_ata(pdf_path):
         vara_match = re.search(r'(\d+)[ªa]\s*Vara do Trabalho de\s*([^,.\n]+)', text, re.IGNORECASE)
         if vara_match:
             metadata['num_vara'] = vara_match.group(1).strip()
-            foro = vara_match.group(2).strip()
-            foro = re.sub(r'\s*-\s*', '-', foro)
-            foro = re.split(r'\s+(?:realizou|audiência|relativa|sob)\b', foro, flags=re.IGNORECASE)[0]
-            metadata['foro'] = foro.strip()
+            foro = sanitize_foro_text(vara_match.group(2).strip())
+            metadata['foro'] = foro if is_valid_foro_text(foro) else None
             print(f"Vara encontrada: {metadata['num_vara']}, Foro: {metadata['foro']}")
             
         # Extract Judge
@@ -450,37 +500,21 @@ def segment_transcript(transcript_content):
     return final_sections, rcte_name, rcdo_name
 
 # Main workflow function
-def main():
-    print("=== Kiwiscribe Word Post-Processor ===")
-    
-    # 1. Get input transcription file
-    transcript_path = None
-    if len(sys.argv) > 1:
-        transcript_path = sys.argv[1]
-    else:
-        transcript_path = select_file_gui("Selecione o arquivo de transcrição formatado", "Arquivos de texto (*.txt)")
-        
+def generate_word_document(transcript_path, ata_pdf_path=None, output_dir=None, logger=print):
+    """Gera o arquivo DOCX de degravação a partir de um TXT transcrito."""
     if not transcript_path or not os.path.exists(transcript_path):
-        print("Erro: Arquivo de transcrição não selecionado ou inexistente.")
-        sys.exit(1)
-        
-    print(f"Arquivo selecionado: {transcript_path}")
-    
-    # 2. Extract process number (first 25 characters of filename)
+        raise FileNotFoundError("Arquivo de transcrição não selecionado ou inexistente.")
+
+    log = logger if callable(logger) else (lambda *_args, **_kwargs: None)
+    log(f"Arquivo selecionado: {transcript_path}")
+
     filename = os.path.basename(transcript_path)
     proc_no = filename[:25]
-    print(f"Número do Processo extraído do nome do arquivo: {proc_no}")
-    
-    # 3. Look for corresponding Ata PDF in the same folder
+    log(f"Número do Processo extraído do nome do arquivo: {proc_no}")
+
     txt_dir = os.path.dirname(transcript_path)
-    pdf_files = glob.glob(os.path.join(txt_dir, f"*{proc_no}*.pdf"))
-    if not pdf_files:
-        pdf_files = glob.glob(os.path.join(txt_dir, "*ata*.pdf"))
-        if not pdf_files:
-            all_pdfs = glob.glob(os.path.join(txt_dir, "*.pdf"))
-            if len(all_pdfs) == 1:
-                pdf_files = all_pdfs
-                
+    target_dir = output_dir if output_dir else txt_dir
+
     metadata = {
         'num_vara': None,
         'foro': None,
@@ -488,54 +522,64 @@ def main():
         'reclamante': None,
         'reclamada': None
     }
-    
-    if pdf_files:
-        print(f"Arquivo de ata correspondente encontrado: {pdf_files[0]}")
-        metadata = extract_metadata_from_ata(pdf_files[0])
+
+    resolved_ata_pdf = ata_pdf_path
+    if not resolved_ata_pdf:
+        pdf_files = glob.glob(os.path.join(txt_dir, f"*{proc_no}*.pdf"))
+        if not pdf_files:
+            pdf_files = glob.glob(os.path.join(txt_dir, "*ata*.pdf"))
+            if not pdf_files:
+                all_pdfs = glob.glob(os.path.join(txt_dir, "*.pdf"))
+                if len(all_pdfs) == 1:
+                    pdf_files = all_pdfs
+        if pdf_files:
+            resolved_ata_pdf = pdf_files[0]
+
+    if resolved_ata_pdf and os.path.exists(resolved_ata_pdf):
+        log(f"Arquivo de ata correspondente encontrado: {resolved_ata_pdf}")
+        metadata = extract_metadata_from_ata(resolved_ata_pdf)
     else:
-        print("Aviso: Nenhum arquivo PDF de ata correspondente encontrado. Continuando sem metadados do PDF.")
-        
-    # Read transcription content
+        log("Aviso: Nenhum arquivo PDF de ata correspondente encontrado. Continuando sem metadados do PDF.")
+
     with open(transcript_path, 'r', encoding='utf-8') as f:
         transcript_content = f.read()
-        
-    # 4. Segment transcript locally in pure Python (No API calls!)
-    print("Segmentando e formatando depoimentos localmente...")
-    segmented, rcte_parsed_name, rcdo_parsed_name = segment_transcript(transcript_content)
-    print("Segmentação concluída!")
 
-    # 5. Open template document and populate bookmarks
+    log("Segmentando e formatando depoimentos localmente...")
+    segmented, rcte_parsed_name, rcdo_parsed_name = segment_transcript(transcript_content)
+    log("Segmentação concluída!")
+
     script_dir = os.path.dirname(os.path.abspath(__file__))
     template_path = os.path.join(script_dir, "Degravação_script.docx")
     if not os.path.exists(template_path):
         template_path = "Degravação_script.docx"
         if not os.path.exists(template_path):
-            print(f"Erro: Template Degravação_script.docx não encontrado em {script_dir} ou no diretório atual.")
-            sys.exit(1)
-            
-    print(f"Usando template: {template_path}")
+            raise FileNotFoundError(
+                f"Template Degravação_script.docx não encontrado em {script_dir} ou no diretório atual."
+            )
+
+    log(f"Usando template: {template_path}")
     doc = docx.Document(template_path)
-    
-    # Fill Process Number
+
     insert_text_at_bookmark(doc, "NumProc", proc_no)
-    
-    # Fill Vara and Foro from metadata (if available)
+
     if metadata['num_vara']:
         num_vara_clean = re.sub(r'[ªa]$', '', metadata['num_vara']).strip()
         insert_text_at_bookmark(doc, "NumVara0", num_vara_clean)
     if metadata['foro']:
-        insert_text_at_bookmark(doc, "Foro1", metadata['foro'])
-        
-    # Fill Names
+        foro_clean = sanitize_foro_text(metadata['foro'])
+        if is_valid_foro_text(foro_clean):
+            insert_text_at_bookmark(doc, "Foro1", foro_clean)
+        else:
+            log("Aviso: Foro extraído da ata foi descartado por conter texto inválido.")
+
     rcte_final_name = metadata['reclamante'] or rcte_parsed_name or ""
-    rcdo_final_name = metadata['reclamada'] or "" # Company name is preferred for Rcdo bookmark
-    
+    rcdo_final_name = metadata['reclamada'] or ""
+
     if rcte_final_name:
         insert_text_at_bookmark(doc, "Rcte", rcte_final_name.upper())
     if rcdo_final_name:
         insert_text_at_bookmark(doc, "Rcdo", rcdo_final_name.upper())
-        
-    # Fill Testimonies
+
     testimonies_map = {
         'DepRcte': segmented.get('Rcte', []),
         'DepRcdo': segmented.get('Rcdo', []),
@@ -546,21 +590,34 @@ def main():
         'DepTestRcdo2': segmented.get('DepTestRcdo2', []),
         'DepTestRcdo3': segmented.get('DepTestRcdo3', [])
     }
-    
+
     for bookmark, lines in testimonies_map.items():
         insert_paragraphs_at_bookmark(doc, bookmark, lines)
-        
-    # Fill Rascunho with original raw transcription
+
     raw_lines = [l.strip() for l in transcript_content.split('\n') if l.strip()]
     insert_paragraphs_at_bookmark(doc, "Rascunho", raw_lines)
-    
-    # Save output file
+
     output_filename = f"{proc_no} degravação.docx"
-    output_path = os.path.join(txt_dir, output_filename)
-    
+    output_path = os.path.join(target_dir, output_filename)
+
     doc.save(output_path)
-    print(f"Documento de degravação criado com sucesso!")
-    print(f"Caminho do arquivo gerado: {output_path}")
+    log("Documento de degravação criado com sucesso!")
+    log(f"Caminho do arquivo gerado: {output_path}")
+    return output_path
+
+def main():
+    print("=== Kiwiscribe Word Post-Processor ===")
+
+    if len(sys.argv) > 1:
+        transcript_path = sys.argv[1]
+    else:
+        transcript_path = select_file_gui("Selecione o arquivo de transcrição formatado", "Arquivos de texto (*.txt)")
+
+    try:
+        generate_word_document(transcript_path, logger=print)
+    except Exception as e:
+        print(f"Erro: {e}")
+        sys.exit(1)
 
 if __name__ == '__main__':
     main()

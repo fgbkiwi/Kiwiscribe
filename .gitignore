@@ -26,6 +26,8 @@ build/
 
 # Specific ignores
 Kiwiscribe.exe
+legacy_multichannel/
+openrouter_openapi.json
 test_output.txt
 test_output_clean.txt
 test_output_large.txt

@@ -24,20 +24,30 @@ import openai
 from openai import OpenAI
 import google.genai as genai # Import simplificado para Gemini
 
+try:
+    from KiwiscribeWord import generate_word_document
+    DOCX_GENERATOR_AVAILABLE = True
+except Exception:
+    generate_word_document = None
+    DOCX_GENERATOR_AVAILABLE = False
+
 APP_VERSION = "1.0.0"
 
 TRANSCRIPTION_MODELS = {
     "AssemblyAI": [("Universal-3 Pro", "universal-3-pro"), ("Universal-2", "universal-2")],
     "gpt-4o-transcribe": [("gpt-4o-transcribe", "gpt-4o-transcribe"), ("gpt-4o-mini-transcribe", "gpt-4o-mini-transcribe"), ("whisper-1", "whisper-1")],
     "Gemini": [("gemini-2.5-flash", "gemini-2.5-flash"), ("gemini-2.5-pro", "gemini-2.5-pro")],
+    "OpenRouter": [("Gemini 2.5 Flash", "google/gemini-2.5-flash"), ("Gemini 2.5 Pro", "google/gemini-2.5-pro"), ("GPT-4o Audio", "openai/gpt-4o-audio-preview")],
     "Soniox": [("soniox/stt-async", "soniox_async")],
     "JustPostProcess": [("Arquivo TXT local", "local_txt")],
+    "JustGenerateDocx": [("Arquivo TXT local", "local_txt")],
 }
 
 POST_PROCESSING_MODELS = {
     "Claude": [("claude-3-7-sonnet-latest", "claude-3-7-sonnet-latest"), ("claude-sonnet-4-5", "claude-sonnet-4-5")],
     "OpenAI": [("gpt-4o-mini", "gpt-4o-mini"), ("gpt-4o", "gpt-4o"), ("gpt-5-mini", "gpt-5-mini"), ("gpt-5", "gpt-5")],
     "Gemini": [("gemini-2.5-flash", "gemini-2.5-flash"), ("gemini-2.5-pro", "gemini-2.5-pro")],
+    "OpenRouter": [("OpenAI GPT-4o mini", "openai/gpt-4o-mini"), ("Claude Sonnet Latest", "~anthropic/claude-sonnet-latest"), ("Gemini Flash Latest", "~google/gemini-flash-latest")],
     "None": [("Nenhum", "none")],
 }
 
@@ -96,7 +106,8 @@ def load_api_keys():
         'gemini': '',
         'gemini_transcription': '',
         'gemini_post': '',
-        'soniox': ''
+        'soniox': '',
+        'openrouter': ''
     } # Padrão
     if os.path.exists(CONFIG_FILE):
         try:
@@ -116,7 +127,7 @@ def load_api_keys():
              print(f"Erro ao carregar arquivo de configuração ({CONFIG_FILE}): {e}. Usando valores padrão.")
     return keys
 
-def save_api_keys(assembly_key, claude_key, openai_key, gemini_key, soniox_key, openai_transcription_key=None, openai_post_key=None, gemini_transcription_key=None, gemini_post_key=None):
+def save_api_keys(assembly_key, claude_key, openai_key, gemini_key, soniox_key, openai_transcription_key=None, openai_post_key=None, gemini_transcription_key=None, gemini_post_key=None, openrouter_key=None):
     """Salva as chaves de API no arquivo de configuração JSON."""
     config = {
         'assembly_ai': assembly_key,
@@ -127,7 +138,8 @@ def save_api_keys(assembly_key, claude_key, openai_key, gemini_key, soniox_key, 
         'gemini': gemini_key,
         'gemini_transcription': gemini_transcription_key if gemini_transcription_key is not None else gemini_key,
         'gemini_post': gemini_post_key if gemini_post_key is not None else gemini_key,
-        'soniox': soniox_key
+        'soniox': soniox_key,
+        'openrouter': openrouter_key if openrouter_key is not None else ''
     }
     try:
         # Cria o diretório pai se não existir (para o caso de ser a primeira vez)
@@ -1072,6 +1084,91 @@ def process_transcript_with_openai(transcript_path, ata_info, api_key, output_pa
     except Exception as e:
         return f"Erro geral ao iniciar processamento com OpenAI: {str(e)}"
 
+def process_transcript_with_openrouter(transcript_path, ata_info, api_key, output_path=None, model_to_use="openai/gpt-4o-mini"):
+    """Processa a transcrição usando a API OpenRouter (chat completions)."""
+    try:
+        if not api_key:
+            return "Erro: API Key do OpenRouter não fornecida."
+        if not os.path.exists(transcript_path):
+            return f"Erro: Arquivo de transcrição não encontrado para processamento OpenRouter: {transcript_path}"
+
+        with open(transcript_path, 'r', encoding='utf-8') as file:
+            transcript_text = file.read()
+
+        if not transcript_text.strip():
+            return f"Erro: O arquivo de transcrição '{os.path.basename(transcript_path)}' está vazio."
+
+        ata_info_formatted = format_ata_info(ata_info)
+        prompt = create_post_processing_prompt(ata_info_formatted, transcript_text)
+
+        if output_path:
+            new_file_path = output_path
+        else:
+            base_name = os.path.basename(transcript_path)
+            base_name = base_name.replace("_transcrito", "")
+            new_file_name = os.path.splitext(base_name)[0] + "_formatado_openrouter.txt"
+            new_file_path = os.path.join(os.path.dirname(transcript_path), new_file_name)
+
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://kiwiscribe.local",
+            "X-Title": "Kiwiscribe",
+        }
+        payload = {
+            "model": model_to_use,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "Você é um assistente especialista em Direito Processual do Trabalho brasileiro focado em corrigir a identificação de interlocutores em transcrições de audiências, seguindo regras processuais e informações da ata."
+                },
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": 0,
+        }
+
+        response = requests.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers=headers,
+            json=payload,
+            timeout=900,
+        )
+        response.raise_for_status()
+        response_json = response.json() or {}
+
+        choices = response_json.get('choices') or []
+        if not choices:
+            return f"Erro ao processar com OpenRouter: resposta sem escolhas. Detalhes: {response_json}"
+
+        message = (choices[0].get('message') or {})
+        content = message.get('content')
+        if isinstance(content, list):
+            processed_text = "".join(part.get('text', '') for part in content if isinstance(part, dict))
+        else:
+            processed_text = content or ""
+
+        if not processed_text.strip():
+            return "Erro ao processar com OpenRouter: resposta sem conteúdo textual."
+
+        with open(new_file_path, 'w', encoding='utf-8') as output_file:
+            output_file.write(processed_text.strip())
+
+        return new_file_path
+
+    except requests.exceptions.HTTPError as e:
+        detail = ""
+        try:
+            detail = e.response.text if e.response is not None else ""
+        except Exception:
+            detail = ""
+        return f"Erro HTTP da API OpenRouter: {e}. {detail}"
+    except requests.exceptions.RequestException as e:
+        return f"Erro de conexão com a API OpenRouter: {e}"
+    except Exception as e:
+        import traceback
+        print(f"Erro inesperado no processamento com OpenRouter:\n{traceback.format_exc()}")
+        return f"Erro inesperado ao processar com OpenRouter: {str(e)}"
+
 def process_transcript_with_gemini(transcript_path, ata_info, api_key_gemini, output_path=None, status_callback=None, model_name="gemini-2.5-flash"):
     """Processa a transcrição usando a API do Google Gemini."""
     try:
@@ -1479,22 +1576,33 @@ class TranscriptionWindow(QMainWindow):
         service_group_layout.setContentsMargins(0, 0, 0, 0)
         service_group_layout.setSpacing(2)
 
-        service_layout = QHBoxLayout()
+        service_layout = QVBoxLayout()
         service_layout.setContentsMargins(0, 0, 0, 0)
+        service_row1 = QHBoxLayout()
+        service_row1.setContentsMargins(0, 0, 0, 0)
+        service_row2 = QHBoxLayout()
+        service_row2.setContentsMargins(22, 0, 0, 0)
         service_label = QLabel("<b>1. Serviço de Transcrição:</b>")
         self.service_assembly = QRadioButton("AssemblyAI")
         self.service_openai = QRadioButton("Open AI")
         self.service_gemini = QRadioButton("Google")
+        self.service_openrouter = QRadioButton("OpenRouter")
         self.service_soniox = QRadioButton("Soniox")
         self.service_just_post_process = QRadioButton("Apenas Pós-processar (Txt Local)") # NOVO: Opção apenas pós-processar
+        self.service_just_docx = QRadioButton("Apenas Gerar DOCX (Txt Local)")
         self.service_assembly.setChecked(True) # Padrão
-        service_layout.addWidget(service_label)
-        service_layout.addWidget(self.service_assembly)
-        service_layout.addWidget(self.service_openai)
-        service_layout.addWidget(self.service_gemini)
-        service_layout.addWidget(self.service_soniox)
-        service_layout.addWidget(self.service_just_post_process) # Adicionado à UI
-        service_layout.addStretch()
+        service_row1.addWidget(service_label)
+        service_row1.addWidget(self.service_assembly)
+        service_row1.addWidget(self.service_openai)
+        service_row1.addWidget(self.service_gemini)
+        service_row1.addWidget(self.service_openrouter)
+        service_row1.addStretch()
+        service_row2.addWidget(self.service_soniox)
+        service_row2.addWidget(self.service_just_post_process)
+        service_row2.addWidget(self.service_just_docx)
+        service_row2.addStretch()
+        service_layout.addLayout(service_row1)
+        service_layout.addLayout(service_row2)
         service_group_layout.addLayout(service_layout)
 
         transcription_model_group = QHBoxLayout()
@@ -1551,6 +1659,7 @@ class TranscriptionWindow(QMainWindow):
         audio_browse_btn = QPushButton("Procurar...")
         audio_browse_btn.setToolTip("Procurar arquivo de áudio local (.mp3, .wav, .m4a, etc.)")
         audio_browse_btn.clicked.connect(lambda: self.browse_file_dialog('audio')) # Usa o novo diálogo
+        audio_group.addWidget(audio_label)
         audio_group.addWidget(self.audio_input)
         audio_group.addWidget(audio_browse_btn)
         self.audio_group_container = QWidget() # Container para poder esconder o grupo todo
@@ -1704,6 +1813,18 @@ class TranscriptionWindow(QMainWindow):
         api_soniox_layout.addWidget(self.api_key_soniox_input)
         keys_layout.addWidget(self.api_soniox_container)
 
+        # OpenRouter API Key
+        self.api_openrouter_container = QWidget()
+        api_openrouter_layout = QHBoxLayout(self.api_openrouter_container)
+        api_openrouter_layout.setContentsMargins(0, 0, 0, 0)
+        api_openrouter_label = QLabel("OpenRouter Key:")
+        self.api_key_openrouter_input = QLineEdit(self.saved_keys.get('openrouter', ''))
+        self.api_key_openrouter_input.setPlaceholderText("Necessária para transcrição e pós-processamento via OpenRouter")
+        self.api_key_openrouter_input.setEchoMode(QLineEdit.EchoMode.Password)
+        api_openrouter_layout.addWidget(api_openrouter_label)
+        api_openrouter_layout.addWidget(self.api_key_openrouter_input)
+        keys_layout.addWidget(self.api_openrouter_container)
+
         controls_layout.addWidget(keys_group)
 
         # --- 4. Pós-processamento ---
@@ -1715,12 +1836,14 @@ class TranscriptionWindow(QMainWindow):
         self.use_claude_radio = QRadioButton("Anthropic")
         self.use_openai_radio = QRadioButton("Open AI")
         self.use_gemini_radio = QRadioButton("Google")
+        self.use_openrouter_radio = QRadioButton("OpenRouter")
         self.use_none_radio = QRadioButton("Nenhum (Apenas Transcrever)")
         self.use_claude_radio.setChecked(True) # Padrão
         post_process_layout.addWidget(post_process_label)
         post_process_layout.addWidget(self.use_claude_radio)
         post_process_layout.addWidget(self.use_openai_radio)
         post_process_layout.addWidget(self.use_gemini_radio)
+        post_process_layout.addWidget(self.use_openrouter_radio)
         post_process_layout.addWidget(self.use_none_radio)
         post_process_layout.addStretch()
         controls_layout.addWidget(post_process_group)
@@ -1734,6 +1857,21 @@ class TranscriptionWindow(QMainWindow):
         post_model_group.addWidget(self.post_model_combo)
         post_model_group.addStretch()
         controls_layout.addLayout(post_model_group)
+
+        # --- 5. Documento Word (.docx) ---
+        word_group = QWidget()
+        word_layout = QVBoxLayout(word_group)
+        word_layout.setContentsMargins(0, 5, 0, 5)
+        word_layout.setSpacing(2)
+        word_title = QLabel("<b>5. Documento Word (.docx):</b>")
+        word_layout.addWidget(word_title)
+        self.generate_docx_checkbox = QCheckBox("Gerar DOCX com transcrição organizada por títulos")
+        self.generate_docx_checkbox.setToolTip("Gera o DOCX usando o TXT final e a ata da seção 2. O arquivo será salvo na pasta do TXT.")
+        self.generate_docx_checkbox.setEnabled(DOCX_GENERATOR_AVAILABLE)
+        if not DOCX_GENERATOR_AVAILABLE:
+            self.generate_docx_checkbox.setToolTip("Módulo de geração DOCX indisponível. Verifique o arquivo KiwiscribeWord.py e dependências docx.")
+        word_layout.addWidget(self.generate_docx_checkbox)
+        controls_layout.addWidget(word_group)
 
         # Adicionar widget de controles ao layout principal
         main_layout.addWidget(controls_widget)
@@ -1777,11 +1915,14 @@ class TranscriptionWindow(QMainWindow):
         self.service_assembly.toggled.connect(self._on_transcription_provider_toggled)
         self.service_openai.toggled.connect(self._on_transcription_provider_toggled)
         self.service_gemini.toggled.connect(self._on_transcription_provider_toggled)
+        self.service_openrouter.toggled.connect(self._on_transcription_provider_toggled)
         self.service_soniox.toggled.connect(self._on_transcription_provider_toggled)
         self.service_just_post_process.toggled.connect(self._on_transcription_provider_toggled)
+        self.service_just_docx.toggled.connect(self._on_transcription_provider_toggled)
         self.use_claude_radio.toggled.connect(self._on_post_provider_toggled)
         self.use_openai_radio.toggled.connect(self._on_post_provider_toggled)
         self.use_gemini_radio.toggled.connect(self._on_post_provider_toggled)
+        self.use_openrouter_radio.toggled.connect(self._on_post_provider_toggled)
         self.use_none_radio.toggled.connect(self._on_post_provider_toggled)
         self.transcription_model_combo.currentIndexChanged.connect(self.update_ui_visibility)
         self.post_model_combo.currentIndexChanged.connect(self.update_ui_visibility)
@@ -1799,6 +1940,11 @@ class TranscriptionWindow(QMainWindow):
         )
         self.api_key_gemini_post_input.editingFinished.connect(
             lambda: self._refresh_model_combos(fetch_remote=True, target='post') if self.use_gemini_radio.isChecked() else None
+        )
+        self.api_key_openrouter_input.editingFinished.connect(
+            lambda: self._refresh_model_combos(fetch_remote=True)
+            if (self.service_openrouter.isChecked() or self.use_openrouter_radio.isChecked())
+            else None
         )
 
         self.update_ui_visibility() # Inicializar visibilidade
@@ -1827,10 +1973,14 @@ class TranscriptionWindow(QMainWindow):
             return "gpt-4o-transcribe"
         if self.service_gemini.isChecked():
             return "Gemini"
+        if self.service_openrouter.isChecked():
+            return "OpenRouter"
         if self.service_soniox.isChecked():
             return "Soniox"
         if self.service_just_post_process.isChecked():
             return "JustPostProcess"
+        if self.service_just_docx.isChecked():
+            return "JustGenerateDocx"
         return "AssemblyAI"
 
     def _current_post_provider(self):
@@ -1840,6 +1990,8 @@ class TranscriptionWindow(QMainWindow):
             return "OpenAI"
         if self.use_gemini_radio.isChecked():
             return "Gemini"
+        if self.use_openrouter_radio.isChecked():
+            return "OpenRouter"
         return "None"
 
     def _populate_combo(self, combo, options, preferred_value=None):
@@ -1859,6 +2011,8 @@ class TranscriptionWindow(QMainWindow):
             return self.api_key_openai_transcription_input.text().strip() if purpose == 'transcription' else self.api_key_openai_post_input.text().strip()
         if provider == "OpenAI":
             return self.api_key_openai_post_input.text().strip()
+        if provider == "OpenRouter":
+            return self.api_key_openrouter_input.text().strip()
         if provider == "Gemini":
             return self.api_key_gemini_transcription_input.text().strip() if purpose == 'transcription' else self.api_key_gemini_post_input.text().strip()
         if provider == "Claude":
@@ -1917,6 +2071,77 @@ class TranscriptionWindow(QMainWindow):
             models.append(name)
         return [(m, m) for m in sorted(set(models))]
 
+    def _openrouter_modalities_from_model(self, model):
+        architecture = model.get('architecture') or {}
+        inputs = architecture.get('input_modalities') or []
+        outputs = architecture.get('output_modalities') or []
+        input_modalities = [str(m).strip().lower() for m in inputs if isinstance(m, str)]
+        output_modalities = [str(m).strip().lower() for m in outputs if isinstance(m, str)]
+        return input_modalities, output_modalities
+
+    def _openrouter_fallback_accept(self, model_id, purpose):
+        model_id = (model_id or "").lower()
+        if not model_id:
+            return False
+        if purpose == 'transcription':
+            # Transcrição via /chat/completions: modelos STT dedicados OU LLMs com áudio.
+            return any(token in model_id for token in ('whisper', 'transcribe', 'stt', 'audio', 'gemini', 'gpt-4o'))
+        excluded = ('transcribe', 'whisper', 'tts', 'embedding', 'moderation')
+        if any(token in model_id for token in excluded):
+            return False
+        return any(token in model_id for token in ('gpt', 'claude', 'gemini', 'llama', 'qwen', 'mistral', 'deepseek', 'o1', 'o3', 'o4'))
+
+    def _fetch_openrouter_models(self, api_key, purpose):
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "HTTP-Referer": "https://kiwiscribe.local",
+            "X-Title": "Kiwiscribe",
+        }
+        response = requests.get(
+            "https://openrouter.ai/api/v1/models",
+            headers=headers,
+            timeout=30,
+        )
+        response.raise_for_status()
+        payload = response.json() or {}
+        data = payload.get('data') or []
+
+        options = []
+        for item in data:
+            model_id = item.get('id')
+            if not model_id:
+                continue
+
+            input_modalities, output_modalities = self._openrouter_modalities_from_model(item)
+            supports = False
+            if input_modalities and output_modalities:
+                if purpose == 'transcription':
+                    # A transcrição usa /chat/completions com input_audio, então qualquer
+                    # modelo que aceite áudio na entrada e gere texto serve.
+                    supports = ('audio' in input_modalities) and ('text' in output_modalities)
+                else:
+                    supports = ('text' in input_modalities) and ('text' in output_modalities)
+            else:
+                supports = self._openrouter_fallback_accept(model_id, purpose)
+
+            if not supports:
+                continue
+
+            display_name = item.get('name') or model_id
+            options.append((display_name, model_id))
+
+        deduped = {}
+        for label, value in options:
+            if value not in deduped:
+                deduped[value] = label
+
+        normalized = sorted([(label, value) for value, label in deduped.items()], key=lambda x: x[0].lower())
+        max_items = 250
+        if len(normalized) > max_items:
+            self.update_message_box(f"ℹ️ OpenRouter: lista filtrada contém {len(normalized)} modelos. Mostrando os {max_items} primeiros para manter a UI responsiva.")
+            normalized = normalized[:max_items]
+        return normalized
+
     def _build_model_refresh_error_message(self, provider, error):
         if isinstance(error, requests.exceptions.ConnectionError):
             return (
@@ -1938,7 +2163,7 @@ class TranscriptionWindow(QMainWindow):
         if not fetch_remote:
             return fallback
         api_key = self._get_provider_key(provider, purpose)
-        if provider in ("AssemblyAI", "Soniox", "JustPostProcess", "None"):
+        if provider in ("AssemblyAI", "Soniox", "JustPostProcess", "JustGenerateDocx", "None"):
             self.update_message_box(f"ℹ️ {provider}: usando lista local de modelos/serviços disponíveis.")
             return fallback
         if not api_key:
@@ -1951,6 +2176,8 @@ class TranscriptionWindow(QMainWindow):
                 models = self._fetch_anthropic_models(api_key)
             elif provider == "Gemini":
                 models = self._fetch_google_models(api_key, purpose)
+            elif provider == "OpenRouter":
+                models = self._fetch_openrouter_models(api_key, purpose)
             else:
                 models = fallback
             if not models:
@@ -1978,18 +2205,18 @@ class TranscriptionWindow(QMainWindow):
             )
 
     def _on_transcription_provider_toggled(self, checked):
-        self.update_ui_visibility()
         if not checked:
             return
+        self.update_ui_visibility()
         current_provider = self._current_transcription_service()
         if current_provider != self._last_transcription_provider:
             self._refresh_model_combos(fetch_remote=True, target='transcription')
             self._last_transcription_provider = current_provider
 
     def _on_post_provider_toggled(self, checked):
-        self.update_ui_visibility()
         if not checked:
             return
+        self.update_ui_visibility()
         current_provider = self._current_post_provider()
         if current_provider != self._last_post_provider:
             self._refresh_model_combos(fetch_remote=True, target='post')
@@ -2045,15 +2272,19 @@ class TranscriptionWindow(QMainWindow):
             'service_assembly': self.service_assembly.isChecked(),
             'service_openai': self.service_openai.isChecked(),
             'service_gemini': self.service_gemini.isChecked(),
+            'service_openrouter': self.service_openrouter.isChecked(),
             'service_soniox': self.service_soniox.isChecked(),
             'service_just_post_process': self.service_just_post_process.isChecked(),
+            'service_just_docx': self.service_just_docx.isChecked(),
             
             'use_claude': self.use_claude_radio.isChecked(),
             'use_openai': self.use_openai_radio.isChecked(),
             'use_gemini': self.use_gemini_radio.isChecked(),
+            'use_openrouter': self.use_openrouter_radio.isChecked(),
             'use_none': self.use_none_radio.isChecked(),
             'transcription_model': self._selected_transcription_model(),
             'post_model': self._selected_post_model(),
+            'generate_docx': self.generate_docx_checkbox.isChecked(),
             
             'num_interlocutors': self.num_input.text(),
             'speaker_identification': self.speaker_identification_cb.isChecked()
@@ -2080,13 +2311,16 @@ class TranscriptionWindow(QMainWindow):
             if settings.get('service_assembly', True): self.service_assembly.setChecked(True)
             elif settings.get('service_openai', False): self.service_openai.setChecked(True)
             elif settings.get('service_gemini', False): self.service_gemini.setChecked(True)
+            elif settings.get('service_openrouter', False): self.service_openrouter.setChecked(True)
             elif settings.get('service_soniox', False): self.service_soniox.setChecked(True)
             elif settings.get('service_just_post_process', False): self.service_just_post_process.setChecked(True)
+            elif settings.get('service_just_docx', False): self.service_just_docx.setChecked(True)
 
             # Restaura Pós-processamento
             if settings.get('use_claude', True): self.use_claude_radio.setChecked(True)
             elif settings.get('use_openai', False): self.use_openai_radio.setChecked(True)
             elif settings.get('use_gemini', False): self.use_gemini_radio.setChecked(True)
+            elif settings.get('use_openrouter', False): self.use_openrouter_radio.setChecked(True)
             elif settings.get('use_none', False): self.use_none_radio.setChecked(True)
 
             # Restaura Nº Interlocutores
@@ -2103,6 +2337,8 @@ class TranscriptionWindow(QMainWindow):
                 if index >= 0:
                     self.post_model_combo.setCurrentIndex(index)
 
+            self.generate_docx_checkbox.setChecked(settings.get('generate_docx', False))
+
             # Atualiza visibilidade após restaurar
             self.update_ui_visibility()
             
@@ -2112,59 +2348,93 @@ class TranscriptionWindow(QMainWindow):
 
     def update_ui_visibility(self):
         """Atualiza a visibilidade e estado dos campos da UI."""
+        self.setUpdatesEnabled(False)
+        try:
         # Verifica estados dos RadioButtons
-        is_assembly_service = self.service_assembly.isChecked()
-        is_openai_service = self.service_openai.isChecked()
-        is_gemini_service = self.service_gemini.isChecked()
-        is_just_post_process = self.service_just_post_process.isChecked() # NOVO estado
-        is_soniox_service = self.service_soniox.isChecked()
+            is_assembly_service = self.service_assembly.isChecked()
+            is_openai_service = self.service_openai.isChecked()
+            is_gemini_service = self.service_gemini.isChecked()
+            is_openrouter_service = self.service_openrouter.isChecked()
+            is_just_post_process = self.service_just_post_process.isChecked()
+            is_just_docx = self.service_just_docx.isChecked()
+            is_soniox_service = self.service_soniox.isChecked()
 
-        is_claude_post = self.use_claude_radio.isChecked()
-        is_openai_post = self.use_openai_radio.isChecked()
-        is_gemini_post = self.use_gemini_radio.isChecked()
-        is_no_post = self.use_none_radio.isChecked()
+            is_claude_post = self.use_claude_radio.isChecked()
+            is_openai_post = self.use_openai_radio.isChecked()
+            is_gemini_post = self.use_gemini_radio.isChecked()
+            is_openrouter_post = self.use_openrouter_radio.isChecked()
+            is_no_post = self.use_none_radio.isChecked()
 
         # Visibilidade Nº Interlocutores (só AssemblyAI)
-        self.num_container.setVisible(is_assembly_service)
+            self.num_container.setVisible(is_assembly_service)
 
         # Visibilidade dos campos de arquivo
         # Se for "Apenas Pós-processar", esconde Áudio e mostra Transcrição.
         # Caso contrário, mostra Áudio e esconde Transcrição.
-        self.audio_group_container.setVisible(not is_just_post_process)
-        self.transcription_group_container.setVisible(is_just_post_process)
+            self.audio_group_container.setVisible(not (is_just_post_process or is_just_docx))
+            self.transcription_group_container.setVisible(is_just_post_process or is_just_docx)
 
         # Visibilidade dos campos/containers de API/Credenciais
-        self.api_assembly_container.setVisible(is_assembly_service)
-        self.api_openai_container.setVisible(is_openai_service or is_openai_post)
-        self.api_claude_container.setVisible(is_claude_post)
-        self.api_gemini_container.setVisible(is_gemini_service or is_gemini_post)
-        self.api_soniox_container.setVisible(is_soniox_service)
+            api_visible = not is_just_docx
+            self.api_assembly_container.setVisible(api_visible and is_assembly_service)
+            self.api_openai_container.setVisible(api_visible and (is_openai_service or is_openai_post))
+            self.api_claude_container.setVisible(api_visible and is_claude_post)
+            self.api_gemini_container.setVisible(api_visible and (is_gemini_service or is_gemini_post))
+            self.api_soniox_container.setVisible(api_visible and is_soniox_service)
+            self.api_openrouter_container.setVisible(api_visible and (is_openrouter_service or is_openrouter_post))
         # Removida a linha que referenciada google_credentials_label
 
         # Atualiza o texto do botão principal e tooltip
-        service_name = ""
-        if is_assembly_service: service_name = "AssemblyAI"
-        elif is_openai_service: service_name = "OpenAI-GPT"
-        elif is_gemini_service: service_name = "Gemini"
-        elif is_soniox_service: service_name = "Soniox"
-        elif is_just_post_process: service_name = "Pós-processar Arquivo"
+            service_name = ""
+            if is_assembly_service: service_name = "AssemblyAI"
+            elif is_openai_service: service_name = "OpenAI-GPT"
+            elif is_gemini_service: service_name = "Gemini"
+            elif is_openrouter_service: service_name = "OpenRouter"
+            elif is_soniox_service: service_name = "Soniox"
+            elif is_just_post_process: service_name = "Pós-processar Arquivo"
+            elif is_just_docx: service_name = "Gerar DOCX"
 
-        self.transcription_model_combo.setEnabled(not is_just_post_process)
-        self.post_model_combo.setEnabled(not is_no_post)
+            self.transcription_model_combo.setEnabled(not (is_just_post_process or is_just_docx))
+            self.use_claude_radio.setEnabled(not is_just_docx)
+            self.use_openai_radio.setEnabled(not is_just_docx)
+            self.use_gemini_radio.setEnabled(not is_just_docx)
+            self.use_openrouter_radio.setEnabled(not is_just_docx)
+            self.use_none_radio.setEnabled(not is_just_docx)
+            self.post_model_combo.setEnabled((not is_no_post) and (not is_just_docx))
 
-        if is_just_post_process:
-             self.transcribe_btn.setText(f"🚀 Iniciar Pós-processamento")
-             self.transcribe_btn.setToolTip("Inicia o pós-processamento do arquivo de texto selecionado.")
-        elif is_no_post:
-             self.transcribe_btn.setText(f"🏁 Iniciar Transcrição ({service_name})")
-             self.transcribe_btn.setToolTip(f"Inicia apenas a transcrição do áudio com {service_name}.")
-        else:
-             post_processor_name = ""
-             if is_claude_post: post_processor_name = "Claude"
-             elif is_openai_post: post_processor_name = "OpenAI"
-             elif is_gemini_post: post_processor_name = "Gemini"
-             self.transcribe_btn.setText(f"🚀 Iniciar ({service_name} + {post_processor_name})")
-             self.transcribe_btn.setToolTip(f"Inicia a transcrição ({service_name}) e depois pós-processamento ({post_processor_name}).")
+            if is_just_docx:
+                if not self.use_none_radio.isChecked():
+                    self.use_none_radio.blockSignals(True)
+                    self.use_none_radio.setChecked(True)
+                    self.use_none_radio.blockSignals(False)
+                if not self.generate_docx_checkbox.isChecked():
+                    self.generate_docx_checkbox.blockSignals(True)
+                    self.generate_docx_checkbox.setChecked(True)
+                    self.generate_docx_checkbox.blockSignals(False)
+                self.post_model_combo.setEnabled(False)
+                self.generate_docx_checkbox.setEnabled(False)
+            else:
+                self.generate_docx_checkbox.setEnabled(DOCX_GENERATOR_AVAILABLE)
+
+            if is_just_docx:
+                self.transcribe_btn.setText("📝 Gerar DOCX")
+                self.transcribe_btn.setToolTip("Gera DOCX a partir do TXT selecionado e ata opcional.")
+            elif is_just_post_process:
+                self.transcribe_btn.setText("🚀 Iniciar Pós-processamento")
+                self.transcribe_btn.setToolTip("Inicia o pós-processamento do arquivo de texto selecionado.")
+            elif is_no_post:
+                self.transcribe_btn.setText(f"🏁 Iniciar Transcrição ({service_name})")
+                self.transcribe_btn.setToolTip(f"Inicia apenas a transcrição do áudio com {service_name}.")
+            else:
+                post_processor_name = ""
+                if is_claude_post: post_processor_name = "Claude"
+                elif is_openai_post: post_processor_name = "OpenAI"
+                elif is_gemini_post: post_processor_name = "Gemini"
+                elif is_openrouter_post: post_processor_name = "OpenRouter"
+                self.transcribe_btn.setText(f"🚀 Iniciar ({service_name} + {post_processor_name})")
+                self.transcribe_btn.setToolTip(f"Inicia a transcrição ({service_name}) e depois pós-processamento ({post_processor_name}).")
+        finally:
+            self.setUpdatesEnabled(True)
 
     # --- Funções browse_file_dialog, browse_file_fallback ---
     # (Mantidas como na versão anterior)
@@ -2271,10 +2541,10 @@ class TranscriptionWindow(QMainWindow):
         gemini_transcription_key = self.api_key_gemini_transcription_input.text().strip()
         gemini_post_key = self.api_key_gemini_post_input.text().strip()
         soniox_key = self.api_key_soniox_input.text().strip()
+        openrouter_key = self.api_key_openrouter_input.text().strip()
 
-        # Validação Áudio
         # Validação Áudio OU Transcrição
-        if self.service_just_post_process.isChecked():
+        if self.service_just_post_process.isChecked() or self.service_just_docx.isChecked():
             # Validação para modo "Apenas Pós-processar"
              transcription_file = self.transcription_input.text().strip()
              if not transcription_file:
@@ -2316,10 +2586,11 @@ class TranscriptionWindow(QMainWindow):
              self.update_message_box("ℹ️ Info: Arquivo da ata não fornecido.")
 
         # Valida chaves/credenciais necessárias
+        is_docx_only = self.service_just_docx.isChecked()
         if self.service_gemini.isChecked() and not gemini_transcription_key:
             self.update_message_box("❌ Erro: API Key do Gemini é necessária para Transcrição Gemini.")
             return
-        if self.use_gemini_radio.isChecked() and not gemini_post_key:
+        if (not is_docx_only) and self.use_gemini_radio.isChecked() and not gemini_post_key:
             self.update_message_box("❌ Erro: API Key do Gemini é necessária para Pós-processamento Gemini.")
             return
 
@@ -2331,12 +2602,22 @@ class TranscriptionWindow(QMainWindow):
         if self.service_soniox.isChecked() and not soniox_key:
             self.update_message_box("❌ Erro: API Key do Soniox é necessária para Transcrição Soniox.")
             return
-        if self.use_openai_radio.isChecked() and not openai_post_key:
+        if self.service_openrouter.isChecked() and not openrouter_key:
+            self.update_message_box("❌ Erro: API Key do OpenRouter é necessária para Transcrição OpenRouter.")
+            return
+        if (not is_docx_only) and self.use_openai_radio.isChecked() and not openai_post_key:
             self.update_message_box("❌ Erro: API Key do OpenAI é necessária para Pós-processamento GPT.")
             return
-        if self.use_claude_radio.isChecked() and not claude_key:
+        if (not is_docx_only) and self.use_claude_radio.isChecked() and not claude_key:
              self.update_message_box("❌ Erro: API Key do Claude é necessária para Pós-processamento Claude.")
              return
+        if (not is_docx_only) and self.use_openrouter_radio.isChecked() and not openrouter_key:
+             self.update_message_box("❌ Erro: API Key do OpenRouter é necessária para Pós-processamento OpenRouter.")
+             return
+
+        if is_docx_only and not DOCX_GENERATOR_AVAILABLE:
+            self.update_message_box("❌ Erro: Gerador DOCX indisponível. Verifique KiwiscribeWord.py e dependências.")
+            return
 
         # Salva chaves inseridas
         save_api_keys(assembly_key if assembly_key else self.saved_keys.get('assembly_ai',''),
@@ -2347,7 +2628,8 @@ class TranscriptionWindow(QMainWindow):
                       openai_transcription_key,
                       openai_post_key,
                       gemini_transcription_key,
-                      gemini_post_key)
+                      gemini_post_key,
+                      openrouter_key)
         self.saved_keys = load_api_keys()
 
         # Salva Preferências da Sessão (Service, Post-processor, etc)
@@ -2362,6 +2644,7 @@ class TranscriptionWindow(QMainWindow):
         selected_service = self._current_transcription_service()
         transcription_model = self._selected_transcription_model()
         post_model = self._selected_post_model()
+        generate_docx = self.generate_docx_checkbox.isChecked() or (selected_service == "JustGenerateDocx")
 
         self.current_run_suffix = self._build_models_suffix(selected_service)
         log_timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -2387,10 +2670,12 @@ class TranscriptionWindow(QMainWindow):
                 gemini_transcription_key,
                 gemini_post_key,
                 soniox_key,
+                openrouter_key,
                 selected_service,
                 use_speaker_identification,
                 transcription_model,
                 post_model,
+                generate_docx,
             ),
             daemon=True
         )
@@ -2552,6 +2837,151 @@ Por favor, forneça uma transcrição completa e detalhada."""
                            worker_signals.message.emit("⚠️ Aviso: Nome do arquivo da API Gemini indisponível para limpeza.")
                   except Exception as delete_error:
                        worker_signals.message.emit(f"⚠️ Aviso: Falha ao limpar arquivo da API Gemini ({uploaded_file.name}): {delete_error}")
+
+    def transcribe_with_openrouter(self, file_path_or_url, destination_path, worker_signals, api_key_openrouter, model_name="openai/whisper-1"):
+        """Realiza a transcrição de áudio usando a API OpenRouter (endpoint de transcrição)."""
+        temp_file_path = None
+        source_path = file_path_or_url
+        try:
+            if not api_key_openrouter:
+                worker_signals.message.emit("❌ Erro: API Key do OpenRouter não fornecida.")
+                return False
+
+            is_url = file_path_or_url.startswith('http://') or file_path_or_url.startswith('https://')
+            if is_url:
+                worker_signals.message.emit("⬇️ Baixando áudio da URL para transcrição via OpenRouter...")
+                response = requests.get(file_path_or_url, stream=True, timeout=60)
+                response.raise_for_status()
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".audio") as temp_file:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        temp_file.write(chunk)
+                    temp_file_path = temp_file.name
+                source_path = temp_file_path
+
+            if not os.path.exists(source_path):
+                worker_signals.message.emit(f"❌ Erro: arquivo de áudio não encontrado em {source_path}")
+                return False
+
+            # O endpoint dedicado /audio/transcriptions (Whisper) só devolve texto corrido,
+            # sem timestamps nem identificação de interlocutores. Para obter saída em
+            # múltiplas linhas com falantes rotulados, usamos o endpoint /chat/completions
+            # com um modelo capaz de áudio (input_audio em base64), instruído via prompt —
+            # mesma abordagem usada na transcrição via Gemini.
+            # Ref.: https://openrouter.ai/docs/guides/overview/multimodal/audio
+            import base64
+            audio_format = (os.path.splitext(source_path)[1].lstrip('.') or 'mp3').lower()
+            # Normaliza extensões comuns para os formatos aceitos pela API.
+            format_aliases = {'oga': 'ogg', 'mpeg': 'mp3', 'mpga': 'mp3'}
+            audio_format = format_aliases.get(audio_format, audio_format)
+
+            with open(source_path, 'rb') as audio_file:
+                audio_b64 = base64.b64encode(audio_file.read()).decode('ascii')
+
+            prompt = """Transcreva este áudio em português brasileiro com as seguintes especificações:
+
+1. Inclua timestamps precisos no formato [HH:MM:SS] para cada fala
+2. Identifique e rotule diferentes interlocutores (Speaker 1, Speaker 2, etc.)
+3. Mantenha a formatação clara com quebras de linha entre diferentes falas
+4. Preserve pausas significativas e mudanças de tópico
+
+Formato desejado:
+[MM:SS] Speaker 1: [texto da fala]
+[MM:SS] Speaker 2: [texto da fala]
+
+Por favor, forneça uma transcrição completa e detalhada. Responda APENAS com a transcrição, sem comentários adicionais."""
+
+            request_headers = {
+                "Authorization": f"Bearer {api_key_openrouter}",
+                "Content-Type": "application/json",
+                "HTTP-Referer": "https://kiwiscribe.local",
+                "X-Title": "Kiwiscribe",
+            }
+            request_body = {
+                "model": model_name,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {"type": "input_audio", "input_audio": {"data": audio_b64, "format": audio_format}},
+                        ],
+                    }
+                ],
+            }
+
+            max_retries = 3
+            response_json = None
+            for attempt in range(1, max_retries + 1):
+                worker_signals.message.emit(f"🧠 OpenRouter transcrição: tentativa {attempt}/{max_retries} com modelo {model_name}...")
+                resp = requests.post(
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    headers=request_headers,
+                    json=request_body,
+                    timeout=600,
+                )
+                if resp.status_code in (429, 500, 502, 503, 504) and attempt < max_retries:
+                    wait_time = attempt * 2
+                    worker_signals.message.emit(f"⚠️ OpenRouter retornou {resp.status_code}. Nova tentativa em {wait_time}s...")
+                    time.sleep(wait_time)
+                    continue
+                resp.raise_for_status()
+                response_json = resp.json() or {}
+                break
+
+            if not response_json:
+                worker_signals.message.emit("❌ Erro: resposta vazia da API OpenRouter.")
+                return False
+
+            choices = response_json.get('choices') or []
+            transcribed_text = ""
+            if choices:
+                message = choices[0].get('message') or {}
+                content = message.get('content')
+                # O conteúdo pode vir como string ou como lista de blocos (texto).
+                if isinstance(content, list):
+                    transcribed_text = "".join(
+                        block.get('text', '') for block in content if isinstance(block, dict)
+                    ).strip()
+                elif isinstance(content, str):
+                    transcribed_text = content.strip()
+
+            if not transcribed_text:
+                api_error = (response_json.get('error') or {}).get('message', '')
+                worker_signals.message.emit(f"❌ Erro: OpenRouter não retornou texto transcrito. {api_error}".strip())
+                return False
+
+            with open(destination_path, 'w', encoding='utf-8') as output_file:
+                output_file.write(transcribed_text)
+
+            line_count = len([ln for ln in transcribed_text.split('\n') if ln.strip()])
+            worker_signals.message.emit(f"✅ Transcrição com OpenRouter concluída: {os.path.basename(destination_path)} ({line_count} linhas).")
+            return True
+
+        except requests.exceptions.HTTPError as e:
+            details = ""
+            try:
+                details = e.response.text if e.response is not None else ""
+            except Exception:
+                details = ""
+            worker_signals.message.emit(f"❌ Erro HTTP OpenRouter na transcrição: {e}. {details}")
+            return False
+        except requests.exceptions.RequestException as e:
+            worker_signals.message.emit(f"❌ Erro de conexão OpenRouter na transcrição: {e}")
+            return False
+        except openai.APIError as e:
+            worker_signals.message.emit(f"❌ Erro da API OpenRouter na transcrição: {e}")
+            return False
+        except Exception as e:
+            import traceback
+            worker_signals.message.emit(f"❌ Erro inesperado na transcrição OpenRouter: {e}")
+            print(f"Traceback OpenRouter Transcription Error:\n{traceback.format_exc()}")
+            return False
+        finally:
+            if temp_file_path and os.path.exists(temp_file_path):
+                try:
+                    os.unlink(temp_file_path)
+                except Exception:
+                    pass
 
 
 
@@ -2902,10 +3332,12 @@ Por favor, forneça uma transcrição completa e detalhada."""
         api_key_gemini_transcription,
         api_key_gemini_post,
         api_key_soniox,
+        api_key_openrouter,
         selected_service,
         use_speaker_identification=False,
         transcription_model=None,
         post_model=None,
+        generate_docx=False,
     ):
         """Executa a transcrição e o pós-processamento (roda em background). use_speaker_identification: usar Speaker Identification da AssemblyAI com nomes da ata."""
         # (Início da função igual à versão anterior: validação, prep. destino, extração ata)
@@ -2941,7 +3373,10 @@ Por favor, forneça uma transcrição completa e detalhada."""
                           estimate = get_estimated_transcription_time(duration)
                           self.worker_signals.message.emit(f"📄 Fonte de áudio é arquivo local. Duração: {ms_to_formatted_time(duration)}. Estimativa conclusão transcrição: ~{estimate}.")
                       else:
-                          self.worker_signals.message.emit(f"📄 Fonte é arquivo de texto local (Pós-processamento direto).")
+                          if selected_service == "JustGenerateDocx":
+                              self.worker_signals.message.emit("📄 Fonte é arquivo de texto local (geração direta de DOCX).")
+                          else:
+                              self.worker_signals.message.emit("📄 Fonte é arquivo de texto local (Pós-processamento direto).")
                  else:
                       self.worker_signals.error.emit(f"❌ Erro fatal: Arquivo local não encontrado em '{file_path_or_url}'.")
                       return
@@ -3000,9 +3435,12 @@ Por favor, forneça uma transcrição completa e detalhada."""
             # --- 3. Transcrição (AssemblyAI, OpenAI ou Gemini) --- MODIFICADO
             transcript_success = False
 
-            if selected_service == "JustPostProcess":
-                 self.worker_signals.message.emit(f"⏩ Pulando etapa de transcrição (Modo Apenas Pós-processar selecionado).")
-                 transcript_success = True
+            if selected_service in ("JustPostProcess", "JustGenerateDocx"):
+                if selected_service == "JustGenerateDocx":
+                    self.worker_signals.message.emit("⏩ Pulando transcrição e pós-processamento (Modo Apenas Gerar DOCX selecionado).")
+                else:
+                    self.worker_signals.message.emit("⏩ Pulando etapa de transcrição (Modo Apenas Pós-processar selecionado).")
+                transcript_success = True
             else:
                 self.worker_signals.message.emit(f"🎙️ Iniciando transcrição com {selected_service}...")
                 start_transcription_time = time.time()
@@ -3174,6 +3612,15 @@ Por favor, forneça uma transcrição completa e detalhada."""
                  )
                  # Se falhar, a função transcribe_with_gemini já terá emitido a mensagem de erro.
 
+            elif selected_service == "OpenRouter":
+                 transcript_success = self.transcribe_with_openrouter(
+                     file_path_or_url,
+                     full_destination_path,
+                     self.worker_signals,
+                     api_key_openrouter,
+                     transcription_model,
+                 )
+
             elif selected_service == "Soniox":
                  transcript_success = self.transcribe_with_soniox(
                      file_path_or_url,
@@ -3184,7 +3631,7 @@ Por favor, forneça uma transcrição completa e detalhada."""
 
 
             end_transcription_time = time.time()
-            if selected_service != "JustPostProcess" and 'start_transcription_time' in locals():
+            if selected_service not in ("JustPostProcess", "JustGenerateDocx") and 'start_transcription_time' in locals():
                 self.worker_signals.message.emit(f"⏱️ Tempo de transcrição ({selected_service}): {end_transcription_time - start_transcription_time:.2f} segundos.")
 
 
@@ -3196,9 +3643,11 @@ Por favor, forneça uma transcrição completa e detalhada."""
                     self.worker_signals.message.emit("ℹ️ Info: Transcrição Gemini configurada para incluir timestamps e diarização de interlocutores.")
 
                 post_processor = None
-                if self.use_claude_radio.isChecked(): post_processor = "Claude"
-                elif self.use_openai_radio.isChecked(): post_processor = "OpenAI"
-                elif self.use_gemini_radio.isChecked(): post_processor = "Gemini"
+                if selected_service != "JustGenerateDocx":
+                    if self.use_claude_radio.isChecked(): post_processor = "Claude"
+                    elif self.use_openai_radio.isChecked(): post_processor = "OpenAI"
+                    elif self.use_gemini_radio.isChecked(): post_processor = "Gemini"
+                    elif self.use_openrouter_radio.isChecked(): post_processor = "OpenRouter"
 
                 if post_processor:
                       self.worker_signals.message.emit(f"⚙️ Iniciando pós-processamento com {post_processor}...")
@@ -3224,6 +3673,14 @@ Por favor, forneça uma transcrição completa e detalhada."""
                                self.worker_signals.message.emit,
                                post_model,
                            )
+                      elif post_processor == "OpenRouter":
+                           result = process_transcript_with_openrouter(
+                               full_destination_path,
+                               ata_info,
+                               api_key_openrouter,
+                               post_output_path,
+                               post_model,
+                           )
 
                       end_post_time = time.time()
                       self.worker_signals.message.emit(f"⏱️ Tempo de pós-processamento ({post_processor}): {end_post_time - start_post_time:.2f} segundos.")
@@ -3242,6 +3699,30 @@ Por favor, forneça uma transcrição completa e detalhada."""
                       self.worker_signals.message.emit("ℹ️ Nenhum pós-processamento selecionado.")
                       # final_output_path já é o full_destination_path
 
+                docx_output_path = None
+                if generate_docx:
+                    if not DOCX_GENERATOR_AVAILABLE:
+                        self.worker_signals.message.emit("⚠️ Geração de DOCX solicitada, mas módulo indisponível.")
+                    else:
+                        txt_source_for_docx = final_output_path if final_output_path and os.path.exists(final_output_path) else full_destination_path
+                        if not txt_source_for_docx or not os.path.exists(txt_source_for_docx):
+                            self.worker_signals.message.emit("⚠️ TXT final não encontrado para gerar DOCX.")
+                        else:
+                            ata_pdf_path = ata_path if ata_path and ata_path.lower().endswith('.pdf') else None
+                            if not ata_pdf_path:
+                                self.worker_signals.message.emit("⚠️ Ata não informada (ou não PDF). DOCX será gerado sem metadados da ata.")
+                            self.worker_signals.message.emit("📝 Iniciando geração do DOCX...")
+                            try:
+                                docx_output_path = generate_word_document(
+                                    txt_source_for_docx,
+                                    ata_pdf_path=ata_pdf_path,
+                                    output_dir=os.path.dirname(txt_source_for_docx),
+                                    logger=lambda msg: self.worker_signals.message.emit(f"📄 DOCX: {msg}"),
+                                )
+                                self.worker_signals.message.emit(f"✅ DOCX gerado com sucesso: {docx_output_path}")
+                            except Exception as e:
+                                self.worker_signals.message.emit(f"⚠️ Falha ao gerar DOCX: {e}")
+
                  # Mensagem final de sucesso
                 total_time = time.time() - start_time_workflow
                 self.worker_signals.message.emit(f"\n🎉 Processo concluído com sucesso em {total_time:.2f} segundos!")
@@ -3250,19 +3731,27 @@ Por favor, forneça uma transcrição completa e detalhada."""
                 # Mensagem final com detalhes dos arquivos
                 if transcript_success:
                     self.worker_signals.message.emit("\n📁 Arquivos gerados:")
+                    item_index = 1
                     
                     if os.path.exists(full_destination_path):
-                        self.worker_signals.message.emit(f"1. Transcrição inicial: {os.path.basename(full_destination_path)}")
+                        self.worker_signals.message.emit(f"{item_index}. Transcrição inicial: {os.path.basename(full_destination_path)}")
                         self.worker_signals.message.emit(f"   Local: {os.path.dirname(full_destination_path)}")
+                        item_index += 1
                     
                     if final_output_path != full_destination_path and os.path.exists(final_output_path):
-                        self.worker_signals.message.emit(f"2. Arquivo formatado: {os.path.basename(final_output_path)}")
+                        self.worker_signals.message.emit(f"{item_index}. Arquivo formatado: {os.path.basename(final_output_path)}")
                         self.worker_signals.message.emit(f"   Local: {os.path.dirname(final_output_path)}")
+                        item_index += 1
+
+                    if generate_docx and 'docx_output_path' in locals() and docx_output_path and os.path.exists(docx_output_path):
+                        self.worker_signals.message.emit(f"{item_index}. Documento DOCX: {os.path.basename(docx_output_path)}")
+                        self.worker_signals.message.emit(f"   Local: {os.path.dirname(docx_output_path)}")
+                        item_index += 1
                     
                     # Adiciona informações sobre o log
                     log_dir = get_log_dir()
                     latest_log = os.path.basename(self.current_log_file) if self.current_log_file else "(não disponível)"
-                    self.worker_signals.message.emit(f"3. Arquivo de log: {latest_log}")
+                    self.worker_signals.message.emit(f"{item_index}. Arquivo de log: {latest_log}")
                     self.worker_signals.message.emit(f"   Local: {log_dir}")
 
             else: # transcript_success == False

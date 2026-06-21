@@ -4,11 +4,10 @@ Kiwiscribe é um conjunto de ferramentas em Python para transcrição e pós-pro
 
 ## Visão Geral
 
-O repositório contém três aplicações principais:
+O repositório contém duas aplicações principais:
 
-- ‘Kiwiscribe.py’: app GUI principal para transcrição e pós-processamento.
-- ‘KiwiscribeMulti.py’: variante para fluxo de 4 canais de áudio.
-- ‘KiwiscribeWord.py’: utilitário para gerar/ajustar documentos Word a partir de transcrições e metadados.
+- ‘Kiwiscribe.py’: app GUI principal para transcrição, pós-processamento e geração de documentos Word (.docx).
+- ‘KiwiscribeWord.py’: utilitário opcional/legado para execução isolada da geração de documento Word.
 
 Também inclui automações para:
 
@@ -20,8 +19,10 @@ Também inclui automações para:
 ## Principais Recursos
 
 - Interface gráfica com PyQt6.
-- Transcrição com múltiplos provedores/modelos (AssemblyAI, OpenAI, Gemini, Soniox).
-- Pós-processamento com Claude, OpenAI ou Gemini.
+- Transcrição com múltiplos provedores/modelos (AssemblyAI, OpenAI, Gemini, OpenRouter, Soniox).
+- Pós-processamento com Claude, OpenAI, Gemini ou OpenRouter.
+- Geração opcional de documento Word (.docx) com transcrição organizada por títulos na própria UI.
+- Modo dedicado “Apenas Gerar DOCX (Txt Local)” para criar o documento sem transcrever áudio.
 - Persistência local de chaves em arquivo JSON de configuração do usuário.
 - Extração de metadados de PDF (ata) para enriquecer o fluxo de trabalho.
 - Build distribuível como ‘.exe’ único (PyInstaller) ou instalador ‘.exe’ (pynsist + NSIS).
@@ -37,7 +38,6 @@ Também inclui automações para:
 ## Estrutura de Arquivos Importantes
 
 - ‘Kiwiscribe.py’: aplicação principal.
-- ‘KiwiscribeMulti.py’: fluxo multicanal.
 - ‘KiwiscribeWord.py’: processamento e geração de ‘.docx’.
 - ‘requirements_build.txt’: dependências de runtime/build de exe.
 - ‘requirements_installer.txt’: dependências para empacotamento do instalador.
@@ -80,6 +80,10 @@ As chaves são salvas em:
 
 A app principal permite preencher chaves via interface e salva automaticamente.
 
+Chave adicional suportada:
+
+- OpenRouter (usada para transcrição e/ou pós-processamento quando o provedor OpenRouter estiver selecionado).
+
 ## Como Executar
 
 ### Aplicacao principal
@@ -88,17 +92,69 @@ A app principal permite preencher chaves via interface e salva automaticamente.
 python Kiwiscribe.py
 ```
 
-### Variação multi-canal
+Na interface, a seção 5 permite:
 
-```bat
-python KiwiscribeMulti.py
+- gerar DOCX ao final do fluxo normal (transcrição/pós-processamento);
+- gerar apenas DOCX a partir de um TXT local, sem transcrição.
+
+O DOCX é salvo na mesma pasta do TXT utilizado como entrada/final.
+
+OpenRouter na prática:
+
+- os combos de modelo são carregados dinamicamente da API de modelos do OpenRouter;
+- o combo de transcrição mostra apenas modelos com entrada de áudio e saída de texto;
+- o combo de pós-processamento mostra apenas modelos com entrada de texto e saída de texto;
+- modelos incompatíveis (por exemplo, apenas imagem/vídeo) não são exibidos nesses combos.
+
+#### Transcrição via OpenRouter: peculiaridade da API (JSON/base64)
+
+A transcrição com OpenRouter **não** usa o endpoint dedicado `/audio/transcriptions`
+(Whisper). Esse endpoint tinha duas limitações incompatíveis com o fluxo jurídico:
+
+1. devolvia apenas texto corrido, sem timestamps nem separação de interlocutores;
+2. expunha somente modelos STT dedicados (Whisper / GPT-4o-transcribe), deixando o
+   menu de seleção artificialmente restrito.
+
+Em vez disso, a transcrição agora usa o endpoint `/chat/completions`, enviando o áudio
+como um bloco `input_audio` codificado em **base64** dentro de um **corpo JSON** — e
+não como `multipart/form-data`. Essa é a peculiaridade central da API do OpenRouter: o
+upload de arquivo binário multipart é rejeitado (`invalid content-type`); o áudio
+precisa ir embutido no JSON. A estrutura enviada é:
+
+```json
+{
+  "model": "google/gemini-2.5-flash",
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        { "type": "text", "text": "<prompt de transcrição com diarização>" },
+        { "type": "input_audio", "input_audio": { "data": "<base64>", "format": "mp3" } }
+      ]
+    }
+  ]
+}
 ```
+
+Consequências práticas dessa abordagem (mesma estratégia já usada na transcrição via
+Gemini):
+
+- a saída vem em **múltiplas linhas**, com timestamps e interlocutores rotulados
+  (`Speaker 1`, `Speaker 2`, ...), viabilizando o pós-processamento que mapeia os
+  falantes para os nomes reais extraídos da ata;
+- o menu de modelos de transcrição volta a listar **todos os modelos com entrada de
+  áudio** (Gemini, GPT-4o Audio etc.), não apenas Whisper;
+- como o áudio vai embutido em base64 (sem upload prévio), prefira modelos **Gemini**
+  para áudios longos, pois lidam melhor com contexto/áudio extenso; o timeout das
+  requisições foi ampliado para acomodar a latência maior de LLMs de áudio.
 
 ### Utilitário Word
 
 ```bat
 python KiwiscribeWord.py
 ```
+
+Observação: a funcionalidade de geração DOCX já está incorporada ao fluxo principal do Kiwiscribe.py (seção 5 da interface e modo “Apenas Gerar DOCX”).
 
 ## Build de Executável (PyInstaller)
 
