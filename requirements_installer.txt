@@ -1,0 +1,21 @@
+# Runtime dependencies for the Windows installer build.
+# Keep this file aligned with the application runtime requirements, excluding build-only tools.
+
+PyQt6>=6.9.1
+assemblyai>=0.41.5
+anthropic>=0.54.0
+openai>=1.90.0
+google-genai>=0.8.3
+google-api-core>=2.25.1
+google-auth>=2.40.3
+google-auth-httplib2>=0.2.0
+google-api-python-client>=2.173.0
+PyPDF2>=3.0.1
+pypdf>=5.6.1
+requests>=2.32.4
+soniox>=0.4.0
+colorama>=0.4.6
+tqdm>=4.67.1
+distro>=1.9.0
+python-docx>=1.2.0
+packaging>=24.1

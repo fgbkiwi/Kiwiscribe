@@ -168,6 +168,30 @@ The final `Kiwiscribe.exe` file is completely standalone and can be:
 - **Antivirus**: Some antivirus software may flag PyInstaller executables
 - **Updates**: Rebuild the executable when you update your Python code
 
+## Windows Installer Build
+
+Kiwiscribe also ships as a pynsist-based Windows installer.
+
+### Versioning
+
+- The first installer-ready release is `1.0.0`.
+- Future releases should follow semantic versioning: `MAJOR.MINOR.PATCH`.
+
+### Build the Installer
+
+Run:
+
+```cmd
+build_installer.bat
+```
+
+This script will:
+
+- Activate the existing Windows virtual environment if it is available
+- Download the runtime wheels into a temporary `installer_wheels` folder
+- Build the installer with pynsist
+- Emit the output as `build\nsis\Kiwiscribe-1.0.0-win64.exe`
+
 ### Cross-Platform Dependency Update Reminder
 
 - Windows workflow in this repo uses `venv_win` and `update_deps_win.bat`.

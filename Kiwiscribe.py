@@ -19,12 +19,12 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
                              QDialog, QVBoxLayout as QVBoxLayoutDialog, QRadioButton,
                              QMessageBox, QComboBox)
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject
-from PyQt6.QtGui import QBrush, QColor
+from PyQt6.QtGui import QBrush, QColor, QPixmap, QIcon
 import openai
 from openai import OpenAI
 import google.genai as genai # Import simplificado para Gemini
 
-APP_VERSION = "2026.06.05-gemini-chunks-v2"
+APP_VERSION = "1.0.0"
 
 TRANSCRIPTION_MODELS = {
     "AssemblyAI": [("Universal-3 Pro", "universal-3-pro"), ("Universal-2", "universal-2")],
@@ -1436,8 +1436,16 @@ class TranscriptionWindow(QMainWindow):
     def __init__(self):
         super().__init__()
 
+        self.app_dir = os.path.dirname(os.path.abspath(__file__))
+        self.logo_image_path = os.path.join(self.app_dir, "KiwiScribeSquared.png")
+        self.installer_icon_path = os.path.join(self.app_dir, "KiwiScribeSquared.ico")
+
         self.setWindowTitle("Transcrição e Pós-Processamento de Audiências Trabalhistas")
         self.setMinimumSize(850, 750)
+        if os.path.exists(self.installer_icon_path):
+            self.setWindowIcon(QIcon(self.installer_icon_path))
+        elif os.path.exists(self.logo_image_path):
+            self.setWindowIcon(QIcon(self.logo_image_path))
         self.saved_keys = load_api_keys()
         self.worker_signals = WorkerSignals()
         self.worker_signals.message.connect(self.update_message_box)
@@ -1449,6 +1457,27 @@ class TranscriptionWindow(QMainWindow):
         main_layout = QVBoxLayout(central_widget)
         main_layout.setSpacing(15)
         main_layout.setContentsMargins(20, 20, 20, 20)
+
+        # Logo no canto superior direito da janela principal.
+        header_layout = QHBoxLayout()
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        header_layout.addStretch()
+        if os.path.exists(self.logo_image_path):
+            logo_label = QLabel()
+            logo_pixmap = QPixmap(self.logo_image_path)
+            if not logo_pixmap.isNull():
+                logo_label.setPixmap(
+                    logo_pixmap.scaled(
+                        96,
+                        96,
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
+                )
+                logo_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
+                logo_label.setToolTip("KiwiScribe")
+                header_layout.addWidget(logo_label)
+        main_layout.addLayout(header_layout)
 
         controls_widget = QWidget()
         controls_layout = QVBoxLayout(controls_widget)

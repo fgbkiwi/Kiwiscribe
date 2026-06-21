@@ -1,6 +1,0 @@
-Comandos do Powershell para assinar digitalmente um arquivo com o certificado digital da SSL.COM na Yubikey, e para verificar a assinatura, conforme orientações do Grok em agosto/2025:
-
-$signtoolPath = "C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\signtool.exe"
-$exePath = "C:\Users\fgb3\OneDrive - NetJus\Dev\PythonApps\Kiwiscribe\Kiwiscribe.exe"
-Start-Process -FilePath $signtoolPath -ArgumentList "sign /fd SHA256 /tr http://ts.ssl.com /td SHA256 /a `"$exePath`"" -NoNewWindow -Wait
-Start-Process -FilePath $signtoolPath -ArgumentList "verify /pa `"$exePath`"" -NoNewWindow -Wait
