@@ -46,6 +46,9 @@ def select_file_gui(title="Selecione o arquivo", filter_desc="Arquivos de texto 
         file_path = file_path[1:-1]
     return file_path
 
+# Número de processo no padrão CNJ (com ou sem o sufixo completo).
+_PROC_NUMBER_RE = r'\d{4,7}-\d{2}(?:\.\d{4}\.\d\.\d{2}\.\d{4})?'
+
 def sanitize_foro_text(raw_foro):
     """Limpa texto de foro removendo ruídos de classe/número processual."""
     if not raw_foro:
@@ -61,20 +64,27 @@ def sanitize_foro_text(raw_foro):
         flags=re.IGNORECASE,
     )[0].strip()
 
-    # Remove classe processual anexada ao foro (ex.: "- ATSum 0000227-51").
+    # Remove rótulos textuais de classe/processo (ex.: "- Ação Trabalhista").
     foro = re.sub(
-        r'\s*-\s*(?:ATSum|RTSum|ACum|Ação\s+Trabalhista|Proc\.?|Processo)\b.*$',
+        r'[\s-]+(?:Ação\s+Trabalhista|Proc\.?|Processo)\b.*$',
         '',
         foro,
         flags=re.IGNORECASE,
     ).strip()
+
+    # O PJe quebra a linha entre a identificação da vara/foro e o número do
+    # processo; ao extrair o PDF essa quebra vira espaço e a sigla da classe
+    # processual (ATOrd, ATSum, RTOrd, RTSum, ACum, CartPrec...) acaba colada
+    # ao nome do foro. Corta qualquer sigla seguida do número do processo.
     foro = re.sub(
-        r'\s+(?:ATSum|RTSum|ACum)\s+\d{4,7}-\d{2}(?:\.\d{4}\.\d\.\d{2}\.\d{4})?',
+        rf'[\s-]+[A-Za-zÀ-ÿ]{{2,12}}\s+{_PROC_NUMBER_RE}.*$',
         '',
         foro,
         flags=re.IGNORECASE,
     ).strip()
-    foro = re.sub(r'\b\d{4,7}-\d{2}(?:\.\d{4}\.\d\.\d{2}\.\d{4})?\b.*$', '', foro).strip()
+
+    # Remove número de processo isolado (sem sigla) e tudo o que vier depois.
+    foro = re.sub(rf'[\s-]*\b{_PROC_NUMBER_RE}\b.*$', '', foro).strip()
 
     # Mantém apenas caracteres válidos para nomes de cidades/foros.
     foro = re.sub(r"[^A-Za-zÀ-ÖØ-öø-ÿ0-9\s\-.'/()]", ' ', foro)
@@ -88,12 +98,14 @@ def is_valid_foro_text(foro):
 
     # Evita termos claramente processuais no valor final.
     forbidden_patterns = [
-        r'\bATSum\b',
-        r'\bRTSum\b',
+        r'\bAT(?:Ord|Sum)\b',
+        r'\bRT(?:Ord|Sum)\b',
         r'\bACum\b',
+        r'\bACPCiv\b',
+        r'\bCartPrec\b',
         r'\bprocesso\b',
         r'\bautos?\b',
-        r'\b\d{4,7}-\d{2}(?:\.\d{4}\.\d\.\d{2}\.\d{4})?\b',
+        rf'\b{_PROC_NUMBER_RE}\b',
     ]
     combined = re.compile('|'.join(forbidden_patterns), re.IGNORECASE)
     return combined.search(foro) is None
@@ -153,10 +165,12 @@ def extract_metadata_from_ata(pdf_path):
         if reclamante_match:
             metadata['reclamante'] = ' '.join(reclamante_match.group(1).strip().split()).title()
         else:
-            recl_pattern3 = r'RECLAMANTE\s*:\s*([^,\n]+?)'
+            # Captura até o próximo rótulo do cabeçalho (ADVOGADO/RECLAMADO),
+            # uma vírgula ou o fim do texto — evita truncar o nome em 1 letra.
+            recl_pattern3 = r'RECLAMANTE\(?A?\)?\s*:\s*(.+?)\s*(?:,|\bADVOGAD[OA]\b|\bRECLAMAD[OA]\b|$)'
             reclamante_match = re.search(recl_pattern3, text, re.IGNORECASE)
             if reclamante_match:
-                metadata['reclamante'] = reclamante_match.group(1).strip().title()
+                metadata['reclamante'] = ' '.join(reclamante_match.group(1).strip().split()).title()
         if metadata['reclamante']:
             print(f"Reclamante encontrado: {metadata['reclamante']}")
                 
@@ -166,10 +180,10 @@ def extract_metadata_from_ata(pdf_path):
         if match_reclamada:
             metadata['reclamada'] = ' '.join(match_reclamada.group(1).strip().split()).title()
         else:
-            reclamada_pattern3 = r'RECLAMADO\s*:\s*([^,\n]+?)'
+            reclamada_pattern3 = r'RECLAMAD[OA]\(?A?\)?\s*:\s*(.+?)\s*(?:,|\bADVOGAD[OA]\b|\bRECLAMANTE\b|$)'
             match_reclamada = re.search(reclamada_pattern3, text, re.IGNORECASE)
             if match_reclamada:
-                metadata['reclamada'] = match_reclamada.group(1).strip().title()
+                metadata['reclamada'] = ' '.join(match_reclamada.group(1).strip().split()).title()
         if metadata['reclamada']:
             print(f"Reclamada encontrada: {metadata['reclamada']}")
                 
@@ -235,25 +249,31 @@ def insert_paragraphs_at_bookmark(doc, bookmark_name, text_lines):
             if b.get(qn('w:name')) == bookmark_name:
                 target_para = p
                 break
-        if target_para:
+        if target_para is not None:
             break
-            
-    if not target_para:
+
+    if target_para is None:
         return False
-        
+
     style = target_para.style
     current_para = target_para
-    
+    inserted = False
+
     for line in text_lines:
         line_str = line.strip()
         if not line_str:
             continue
         current_para = insert_paragraph_after(current_para, line_str, style)
-        
-    # Remove the placeholder paragraph
-    p_element = target_para._p
-    p_element.getparent().remove(p_element)
-    return True
+        inserted = True
+
+    # Só consome o parágrafo-marcador quando há conteúdo para colocar no lugar.
+    # Para seções sem depoimento, preserva o marcador (DepRcte, DepRcdo,
+    # DepTestRcte1, ...) sob o título, em vez de apagá-lo silenciosamente e
+    # deixar o título órfão — o que dificultava recolocar o trecho depois.
+    if inserted:
+        p_element = target_para._p
+        p_element.getparent().remove(p_element)
+    return inserted
 
 # Pure-Python transcript parser and segmenter
 def simplify_role(role, name, text_context=""):
@@ -286,11 +306,10 @@ def simplify_role(role, name, text_context=""):
         
     return role
 
-def clean_intro_lines(section_lines, deponent_patterns):
+def clean_intro_lines(section_lines):
     first_speech_idx = None
     for idx, line in enumerate(section_lines):
-        role_lower = line['role'].lower()
-        if any(p in role_lower for p in deponent_patterns) and "advogado" not in role_lower and "advogada" not in role_lower:
+        if line.get('is_deponent'):
             first_speech_idx = idx
             break
             
@@ -361,12 +380,82 @@ def replace_witness_qualification(witness_lines):
     new_lines = witness_lines[:qualification_start_idx] + [qual_placeholder] + witness_lines[warning_end_idx + 1:]
     return new_lines
 
+_ORDINAL_MAP = {'1': '1', 'primeira': '1', '2': '2', 'segunda': '2', '3': '3', 'terceira': '3'}
+
+def _party_from_label(text_lower):
+    """Identifica a parte (Rcte/Rcdo) a partir de sinônimos no texto, ou None.
+
+    Reclamante: 'reclamante', 'autor'. Reclamado: 'reclamad', 'ré'/'réu',
+    'empresa'. Retorna None quando nenhuma parte é mencionada.
+    """
+    if 'reclamante' in text_lower or re.search(r'\bautor(?:a|es)?\b', text_lower):
+        return 'Rcte'
+    if ('reclamad' in text_lower or 'empresa' in text_lower
+            or re.search(r'\br[eé](?:us?)?\b', text_lower)):
+        return 'Rcdo'
+    return None
+
+def _witness_ordinal(role_lower):
+    """Extrai o número ordinal de uma testemunha do rótulo (1/2/3), ou None."""
+    m = re.search(r'(\d+)\s*[ªaº°]?\s*testemunha', role_lower)
+    if m:
+        return _ORDINAL_MAP.get(m.group(1))
+    for word, value in _ORDINAL_MAP.items():
+        if word.isalpha() and word in role_lower:
+            return value
+    return None
+
+def classify_deponent_role(role):
+    """Classifica o rótulo de uma fala quanto ao depoente.
+
+    Retorna ('test', 'Rcte'|'Rcdo'|None, num|None) para testemunhas, ('dep',
+    'Rcte'|'Rcdo', None) para reclamante/preposto/representante (a própria parte),
+    ou None quando a fala não é de um depoente (advogado, juiz, interlocutor não
+    identificado).
+
+    Aceita rótulos com ordinal ("1ª Testemunha do Reclamante"), sem ordinal
+    ("Testemunha da Reclamada") e sinônimos de parte ("Testemunha do Autor",
+    "1ª Testemunha da Ré"). Quando o rótulo é apenas "Testemunha" (ou só o nome
+    da testemunha), ``party``/``num`` vêm ``None`` e o chamador resolve a parte
+    e a numeração pelo contexto e pela ordem das oitivas.
+    """
+    role_lower = role.lower()
+    if 'advogado' in role_lower or 'advogada' in role_lower:
+        return None
+    if 'testemunha' in role_lower:
+        return ('test', _party_from_label(role_lower), _witness_ordinal(role_lower))
+    if ('representante' in role_lower and 'reclamad' in role_lower) \
+            or 'preposto' in role_lower or 'preposta' in role_lower:
+        return ('dep', 'Rcdo', None)
+    if 'reclamante' in role_lower or re.fullmatch(r'\s*autor(?:a)?\s*', role_lower):
+        return ('dep', 'Rcte', None)
+    if 'reclamad' in role_lower or re.fullmatch(r'\s*r[eé](?:us?)?\s*', role_lower):
+        return ('dep', 'Rcdo', None)
+    return None
+
+def _witness_party_hint(text_lower):
+    """Pista, no diálogo, de qual parte é a testemunha (ex.: 'testemunha do autor')."""
+    m = re.search(r'testemunh\w*\s+(?:\w+\s+){0,2}?d[oae]s?\s+(\w+)', text_lower)
+    return _party_from_label(m.group(1)) if m else None
+
+def _witness_call_cue(text_lower):
+    """Indica a chamada/oitiva de uma (nova) testemunha; retorna a parte ou None."""
+    if not re.search(r'\b(?:chamar?|ouvir|trazer|adentrar?|entrar|pr[oó]xim\w+|'
+                     r'primeir\w+|segund\w+|terceir\w+|vamos)\b', text_lower):
+        return None
+    return _witness_party_hint(text_lower)
+
 def segment_transcript(transcript_content):
     lines = transcript_content.split('\n')
     parsed_lines = []
     
-    pattern_three = re.compile(r'^\[(\d{2}:\d{2}:\d{2})\]\s*([^:]+?)\s*:\s*([^:]+?)\s*:\s*(.*)$')
-    pattern_two = re.compile(r'^\[(\d{2}:\d{2}:\d{2})\]\s*([^:]+?)\s*:\s*(.*)$')
+    # Aceita carimbos de tempo em HH:MM:SS (ex.: [00:01:24]) e em MM:SS
+    # (ex.: [01:24]); alguns pós-processadores emitem apenas minutos:segundos,
+    # o que antes fazia a segmentação ignorar todas as linhas e esvaziar as
+    # seções de depoimento.
+    _ts = r'\d{1,2}:\d{2}(?::\d{2})?'
+    pattern_three = re.compile(rf'^\[({_ts})\]\s*([^:]+?)\s*:\s*([^:]+?)\s*:\s*(.*)$')
+    pattern_two = re.compile(rf'^\[({_ts})\]\s*([^:]+?)\s*:\s*(.*)$')
     
     for idx, line in enumerate(lines):
         line_str = line.strip()
@@ -398,63 +487,111 @@ def segment_transcript(transcript_content):
                 'section': None
             })
             
-    # Put more specific patterns first!
-    deponent_keys = {
-        'DepTestRcte1': ['1ª testemunha do reclamante', 'primeira testemunha do reclamante'],
-        'DepTestRcte2': ['2ª testemunha do reclamante', 'segunda testemunha do reclamante'],
-        'DepTestRcte3': ['3ª testemunha do reclamante', 'terceira testemunha do reclamante'],
-        'DepTestRcdo1': ['1ª testemunha da reclamada', 'primeira testemunha da reclamada'],
-        'DepTestRcdo2': ['2ª testemunha da reclamada', 'segunda testemunha da reclamada'],
-        'DepTestRcdo3': ['3ª testemunha da reclamada', 'terceira testemunha da reclamada'],
-        'Rcte': ['reclamante'],
-        'Rcdo': ['representante da reclamada', 'preposto', 'preposta']
-    }
-    
-    # 1. Direct label assignment
-    for idx, line in enumerate(parsed_lines):
-        role_lower = line['role'].lower()
-        for dep, patterns in deponent_keys.items():
-            if any(p in role_lower for p in patterns) and "advogado" not in role_lower and "advogada" not in role_lower:
-                line['section'] = dep
-                break
-                
-    # 2. Sequential/Transition filling
+    section_keys = [
+        'DepTestRcte1', 'DepTestRcte2', 'DepTestRcte3',
+        'DepTestRcdo1', 'DepTestRcdo2', 'DepTestRcdo3',
+        'Rcte', 'Rcdo',
+    ]
+
+    # 1. Direct label assignment.
+    #
+    # A atribuição é por PARTE (não pela ordem em que os depoimentos ocorrem),
+    # então a ordem das oitivas pode variar livremente: testemunhas da reclamada
+    # antes das do reclamante, preposto antes do reclamante, ou uma parte
+    # reinquirida após as testemunhas — cada fala vai para a seção da sua parte.
+    #
+    # Testemunhas sem ordinal são numeradas pela ordem das oitivas (cada bloco
+    # contíguo da mesma parte = próxima testemunha 1ª/2ª/3ª); interrupções de
+    # advogado/juiz não encerram o bloco. Rótulos só com "Testemunha" (ou apenas
+    # o nome) têm a parte inferida por pistas do diálogo e pela continuidade.
+    witness_blocks = {'Rcte': 0, 'Rcdo': 0}  # nº de testemunhas já numeradas/parte
+    prev_deponent = None      # (kind, party) da última fala de depoente
+    pending_party = None      # parte sugerida pela última menção a "testemunha d..."
+    new_call = False          # houve chamada de nova testemunha desde a última fala
+    unresolved_witness = False
+    for line in parsed_lines:
+        text_lower = line['text'].lower()
+        hint = _witness_party_hint(text_lower)
+        if hint:
+            pending_party = hint
+        call = _witness_call_cue(text_lower)
+        if call:
+            pending_party = call
+            new_call = True
+
+        cls = classify_deponent_role(line['role'])
+        if cls is None:
+            continue
+        kind, party, num = cls
+
+        if kind == 'dep':
+            line['section'] = party
+            line['is_deponent'] = True
+            prev_deponent = (kind, party)
+            new_call = False
+            continue
+
+        # --- testemunha ---
+        block_party = prev_deponent[1] if (prev_deponent and prev_deponent[0] == 'test') else None
+        if party is None:
+            # "Testemunha" sem parte: usa nova chamada, senão a testemunha em
+            # curso, senão a última pista; em último caso, a ordem legal padrão.
+            if new_call and pending_party:
+                party = pending_party
+            elif block_party:
+                party = block_party
+            elif pending_party:
+                party = pending_party
+            else:
+                party = 'Rcte'
+                unresolved_witness = True
+
+        if num is not None:
+            section_num = num                       # ordinal explícito: direto
+            witness_blocks[party] = max(witness_blocks[party], int(num))
+        else:
+            # Nova testemunha quando muda a parte ou houve chamada de testemunha.
+            if party != block_party or new_call:
+                witness_blocks[party] = min(witness_blocks[party] + 1, 3)
+            section_num = str(max(witness_blocks[party], 1))
+
+        line['section'] = f'DepTest{party}{section_num}'
+        line['is_deponent'] = True
+        prev_deponent = ('test', party)
+        new_call = False
+
+    if unresolved_witness:
+        print("Aviso: alguma testemunha não pôde ser atribuída a uma parte pelo "
+              "rótulo; usando a ordem padrão (reclamante). Confira o resultado.")
+
+    # 2. Sequential/Transition filling.
     current_section = 'Rcte'
     for idx, line in enumerate(parsed_lines):
         if line['section'] is not None:
             current_section = line['section']
             continue
-            
+
         text_lower = line['text'].lower()
-        
-        # Lookahead for next deponent
+
+        # Lookahead: próxima fala já rotulada como de um depoente.
         next_dep = None
         for future_idx in range(idx, len(parsed_lines)):
-            future_line = parsed_lines[future_idx]
-            future_role = future_line['role'].lower()
-            if "advogado" in future_role or "advogada" in future_role:
-                continue
-            is_dep = False
-            for dep, patterns in deponent_keys.items():
-                if any(p in future_role for p in patterns):
-                    next_dep = dep
-                    is_dep = True
-                    break
-            if is_dep:
+            if parsed_lines[future_idx]['section'] is not None:
+                next_dep = parsed_lines[future_idx]['section']
                 break
-                
+
         if next_dep and next_dep != current_section:
             if next_dep == 'Rcdo':
-                if any(kw in text_lower for kw in ['preposta', 'preposto', 'representante', 'camila', 'kamila', 'chamar', 'consegue ouvir']):
+                if any(kw in text_lower for kw in ['preposta', 'preposto', 'representante', 'chamar', 'consegue ouvir', 'trazer']):
                     current_section = 'Rcdo'
             elif next_dep.startswith('DepTest'):
-                if any(kw in text_lower for kw in ['testemunha', 'contraditar', 'contradita', 'chamar', 'ouvir', 'escutando', 'neovan', 'neuvan', 'eduardo']):
+                if any(kw in text_lower for kw in ['testemunha', 'contraditar', 'contradita', 'chamar', 'ouvir', 'escutando', 'trazer', 'compromisso']):
                     current_section = next_dep
-                    
+
         line['section'] = current_section
 
     # 3. Grouping and filtering
-    sections_content = {k: [] for k in deponent_keys}
+    sections_content = {k: [] for k in section_keys}
     for line in parsed_lines:
         sections_content[line['section']].append(line)
         
@@ -464,24 +601,22 @@ def segment_transcript(transcript_content):
     
     for dep, dep_lines in sections_content.items():
         has_speech = False
-        dep_patterns = deponent_keys[dep]
         for line in dep_lines:
-            role_lower = line['role'].lower()
-            if any(p in role_lower for p in dep_patterns) and "advogado" not in role_lower and "advogada" not in role_lower:
+            if line.get('is_deponent'):
                 has_speech = True
                 # Store speaker name if deponent
-                if dep == 'Rcte':
+                if dep == 'Rcte' and not rcte_name:
                     rcte_name = line['name'].upper()
-                elif dep == 'Rcdo':
+                elif dep == 'Rcdo' and not rcdo_name:
                     rcdo_name = line['name'].upper()
                 break
-                
+
         if not has_speech:
             final_sections[dep] = []
             continue
-            
+
         # Clean intro lines
-        dep_lines = clean_intro_lines(dep_lines, dep_patterns)
+        dep_lines = clean_intro_lines(dep_lines)
         
         # Replace qualifications for witnesses
         if dep.startswith('DepTest'):
