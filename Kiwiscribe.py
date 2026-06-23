@@ -2646,6 +2646,16 @@ class TranscriptionWindow(QMainWindow):
         post_model = self._selected_post_model()
         generate_docx = self.generate_docx_checkbox.isChecked() or (selected_service == "JustGenerateDocx")
 
+        # Snapshot da escolha de pós-processamento no thread da GUI (evita leitura
+        # de widgets a partir do thread de trabalho, que pode retornar estado obsoleto
+        # e fazer o pós-processamento ser pulado em re-execuções).
+        post_processor = None
+        if selected_service != "JustGenerateDocx":
+            if self.use_claude_radio.isChecked(): post_processor = "Claude"
+            elif self.use_openai_radio.isChecked(): post_processor = "OpenAI"
+            elif self.use_gemini_radio.isChecked(): post_processor = "Gemini"
+            elif self.use_openrouter_radio.isChecked(): post_processor = "OpenRouter"
+
         self.current_run_suffix = self._build_models_suffix(selected_service)
         log_timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         self.current_log_file = os.path.join(
@@ -2676,6 +2686,7 @@ class TranscriptionWindow(QMainWindow):
                 transcription_model,
                 post_model,
                 generate_docx,
+                post_processor,
             ),
             daemon=True
         )
@@ -3338,6 +3349,7 @@ Por favor, forneça uma transcrição completa e detalhada. Responda APENAS com 
         transcription_model=None,
         post_model=None,
         generate_docx=False,
+        post_processor=None,
     ):
         """Executa a transcrição e o pós-processamento (roda em background). use_speaker_identification: usar Speaker Identification da AssemblyAI com nomes da ata."""
         # (Início da função igual à versão anterior: validação, prep. destino, extração ata)
@@ -3642,15 +3654,13 @@ Por favor, forneça uma transcrição completa e detalhada. Responda APENAS com 
             # --- 4. Pós-processamento (Claude, OpenAI ou Gemini) ---
             if transcript_success:
                 # Adiciona informação sobre a transcrição Gemini melhorada
-                if selected_service == "Gemini" and not self.use_none_radio.isChecked():
+                if selected_service == "Gemini" and post_processor:
                     self.worker_signals.message.emit("ℹ️ Info: Transcrição Gemini configurada para incluir timestamps e diarização de interlocutores.")
 
-                post_processor = None
-                if selected_service != "JustGenerateDocx":
-                    if self.use_claude_radio.isChecked(): post_processor = "Claude"
-                    elif self.use_openai_radio.isChecked(): post_processor = "OpenAI"
-                    elif self.use_gemini_radio.isChecked(): post_processor = "Gemini"
-                    elif self.use_openrouter_radio.isChecked(): post_processor = "OpenRouter"
+                # post_processor é capturado no thread da GUI em start_transcription;
+                # JustGenerateDocx nunca pós-processa.
+                if selected_service == "JustGenerateDocx":
+                    post_processor = None
 
                 if post_processor:
                       self.worker_signals.message.emit(f"⚙️ Iniciando pós-processamento com {post_processor}...")

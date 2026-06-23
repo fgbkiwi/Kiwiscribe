@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Correção: o pós-processamento deixava de ser executado em re-execuções (especialmente
+  no modo "Apenas Pós-processar") porque a escolha do pós-processador era lida dos
+  `QRadioButton` dentro do thread de trabalho, retornando estado obsoleto. A seleção
+  passa a ser capturada no thread da GUI em `start_transcription` e repassada ao
+  `perform_transcription_workflow` como parâmetro.
+- Build: `build_installer.bat` passa a incrementar automaticamente a versão do app antes
+  de cada build, seguindo versionamento semântico (padrão: `patch`). Use
+  `build_installer.bat minor` ou `build_installer.bat major` para os demais incrementos.
+- Adicionado `bump_version.py`: fonte única da versão é `APP_VERSION` em `Kiwiscribe.py`;
+  o script incrementa e sincroniza a versão em `Kiwiscribe.py` e `kiwiscribe_installer.cfg`
+  (a versão do `[Python]` no `.cfg` não é alterada).
+
 - Segurança: removida a API Key da AssemblyAI embutida no código-fonte; a chave passa a
   vir exclusivamente do arquivo `.transcription_config.json` (campo `assembly_ai`) ou da
   interface. Sem chave configurada, a transcrição é abortada com mensagem clara.

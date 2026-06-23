@@ -179,14 +179,23 @@ build_installer.bat
 Esse fluxo:
 
 - ativa o ‘venv_win’;
+- incrementa a versão do app automaticamente (padrão: ‘patch’) e sincroniza ‘Kiwiscribe.py’ e ‘kiwiscribe_installer.cfg’;
 - garante pynsist instalado;
 - baixa wheels para ‘installer_wheels’;
 - executa ‘python -m nsist kiwiscribe_installer.cfg’;
 - gera instalador em ‘build\nsis’.
 
+Para escolher o tipo de incremento:
+
+```bat
+build_installer.bat            :: 1.0.0 -> 1.0.1 (patch, padrão)
+build_installer.bat minor      :: 1.0.0 -> 1.1.0
+build_installer.bat major      :: 1.0.0 -> 2.0.0
+```
+
 Saída esperada:
 
-- ‘build\nsis\Kiwiscribe-1.0.0-win64.exe’
+- ‘build\nsis\Kiwiscribe-<versão>-win64.exe’
 
 ## Versionamento
 
@@ -202,17 +211,19 @@ Regras práticas:
 - **MINOR**: nova funcionalidade retrocompatível.
 - **PATCH**: correção sem quebra de compatibilidade.
 
+Bump automático:
+
+- ‘APP_VERSION’ em ‘Kiwiscribe.py’ é a fonte única da versão.
+- ‘build_installer.bat’ incrementa a versão a cada build (padrão ‘patch’) via ‘bump_version.py’,
+  sincronizando ‘Kiwiscribe.py’ e ‘kiwiscribe_installer.cfg’.
+- Use ‘build_installer.bat minor’ ou ‘build_installer.bat major’ para os demais incrementos.
+- Como o bump ocorre a cada execução, re-rodar o build repetidamente continua incrementando o ‘patch’.
+
 Estado atual:
 
 - Versão da app: ‘1.0.0’ (em ‘Kiwiscribe.py’).
 - Changelog inicial: ‘CHANGELOG.md’.
-- Nome do instalador: ‘Kiwiscribe-1.0.0-win64.exe’.
-
-Sugestão de próxima evolução:
-
-- ‘1.0.1’ para hotfix;
-- ‘1.1.0’ para novas features sem quebra;
-- ‘2.0.0’ para mudanças breaking.
+- Nome do instalador: ‘Kiwiscribe-<versão>-win64.exe’.
 
 ## Verificação e Atualização de Dependências
 
@@ -291,9 +302,9 @@ rmdir /s /q build\nsis
 
 - Mantenha ‘requirements_build.txt’ e ‘requirements_installer.txt’ consistentes.
 - Atualize ‘CHANGELOG.md’ a cada release.
-- Ao mudar versão, sincronize:
-  - ‘APP_VERSION’ em ‘Kiwiscribe.py’;
-  - ‘version’ e ‘installer_name’ em ‘kiwiscribe_installer.cfg’.
+- A versão é incrementada automaticamente pelo ‘build_installer.bat’ (via ‘bump_version.py’),
+  que sincroniza ‘APP_VERSION’ em ‘Kiwiscribe.py’ e ‘version’ em ‘kiwiscribe_installer.cfg’.
+  Não é mais necessário editar a versão manualmente.
 - Antes de commit/release:
   - rode ‘check_deps.bat’;
   - teste execucao local (‘python Kiwiscribe.py’);
@@ -301,7 +312,6 @@ rmdir /s /q build\nsis
 
 ## Roadmap Sugerido
 
-- Automatizar bump de versão em um único comando.
 - Criar pipeline CI para build de ‘.exe’ e instalador.
 - Publicar artefatos por release no GitHub.
 - Adicionar testes automatizados para fluxos críticos.

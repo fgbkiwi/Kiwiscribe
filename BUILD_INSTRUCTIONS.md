@@ -175,7 +175,29 @@ Kiwiscribe also ships as a pynsist-based Windows installer.
 ### Versioning
 
 - The first installer-ready release is `1.0.0`.
-- Future releases should follow semantic versioning: `MAJOR.MINOR.PATCH`.
+- Releases follow semantic versioning: `MAJOR.MINOR.PATCH`.
+- `APP_VERSION` in `Kiwiscribe.py` is the single source of truth. `build_installer.bat`
+  bumps it automatically on every build (see below) and keeps `kiwiscribe_installer.cfg`
+  in sync via `bump_version.py`.
+
+### Automatic Version Bump
+
+Each run of `build_installer.bat` increments the app version **before** building, so the
+installer always carries a new number. The default is a patch bump:
+
+```cmd
+build_installer.bat            # 1.0.0 -> 1.0.1 (patch, default)
+build_installer.bat minor      # 1.0.0 -> 1.1.0
+build_installer.bat major      # 1.0.0 -> 2.0.0
+```
+
+The bump is performed by `bump_version.py`, which reads `APP_VERSION` from `Kiwiscribe.py`,
+increments the requested component, and writes the new value back to both `Kiwiscribe.py`
+and the `[Application]` `version=` line in `kiwiscribe_installer.cfg` (the `[Python]`
+version is left untouched). If the bump fails, the build aborts.
+
+Note: because the bump happens on every run, re-running the build repeatedly keeps
+incrementing the patch number.
 
 ### Build the Installer
 
@@ -188,9 +210,10 @@ build_installer.bat
 This script will:
 
 - Activate the existing Windows virtual environment if it is available
+- Bump the app version (default: patch) and sync it across `Kiwiscribe.py` and the installer config
 - Download the runtime wheels into a temporary `installer_wheels` folder
 - Build the installer with pynsist
-- Emit the output as `build\nsis\Kiwiscribe-1.0.0-win64.exe`
+- Emit the output as `build\nsis\Kiwiscribe-<version>-win64.exe`
 
 ### Cross-Platform Dependency Update Reminder
 

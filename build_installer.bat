@@ -30,6 +30,19 @@ if defined VENV_PATH (
     echo No virtual environment found. Using system Python.
 )
 
+rem Bump the app version (default: patch) before building so the installer and
+rem Kiwiscribe.py carry the new number. Override with: build_installer.bat minor
+set "VERSION_PART=%~1"
+if "%VERSION_PART%"=="" set "VERSION_PART=patch"
+echo Bumping app version (%VERSION_PART%)...
+for /f "usebackq delims=" %%V in (`"%PYTHON_EXE%" bump_version.py %VERSION_PART%`) do set "NEW_VERSION=%%V"
+if not defined NEW_VERSION (
+    echo.
+    echo ERROR: Failed to bump app version.
+    goto :error_exit
+)
+echo New app version is %NEW_VERSION%
+
 echo Verifying pynsist installation...
 "%PYTHON_EXE%" -c "import nsist" >nul 2>nul
 if errorlevel 1 (
