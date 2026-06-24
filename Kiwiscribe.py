@@ -31,7 +31,7 @@ except Exception:
     generate_word_document = None
     DOCX_GENERATOR_AVAILABLE = False
 
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.0.1"
 
 TRANSCRIPTION_MODELS = {
     "AssemblyAI": [("Universal-3 Pro", "universal-3-pro"), ("Universal-2", "universal-2")],
@@ -3472,11 +3472,17 @@ Por favor, forneça uma transcrição completa e detalhada. Responda APENAS com 
                     aai.settings.api_key = effective_assembly_key
 
                     self.worker_signals.message.emit(f"🗣️ Configurando AssemblyAI (Interlocutores: {'Automático' if num_interlocutors == 0 else num_interlocutors})...")
+                    boost_terms = ["juiz", "juíza", "excelência", "reclamante", "reclamada", "preposto", "preposta", "advogado", "advogada", "testemunha", "depoimento", "contradita", "indeferido", "deferido", "pela ordem", "questão de ordem", "autos", "sentença", "acórdão", "liminar", "tutela", "mérito", "ônus da prova", "cartão de ponto", "horas extras", "intervalo", "verbas rescisórias"]
                     config_params = {
                         "speech_models": [transcription_model],
-                        "language_code": "pt", "speaker_labels": True,
-                        "word_boost": ["juiz", "juíza", "excelência", "reclamante", "reclamada", "preposto", "preposta", "advogado", "advogada", "testemunha", "depoimento", "contradita", "indeferido", "deferido", "pela ordem", "questão de ordem", "autos", "sentença", "acórdão", "liminar", "tutela", "mérito", "ônus da prova", "cartão de ponto", "horas extras", "intervalo", "verbas rescisórias"],
-                        "boost_param": "high" }
+                        "language_code": "pt", "speaker_labels": True }
+                    # word_boost/boost_param são incompatíveis com os modelos Universal-3;
+                    # estes usam keyterms_prompt para destacar termos jurídicos frequentes.
+                    if str(transcription_model).startswith("universal-3"):
+                        config_params["keyterms_prompt"] = boost_terms
+                    else:
+                        config_params["word_boost"] = boost_terms
+                        config_params["boost_param"] = "high"
                     if 0 < num_interlocutors <= 15: config_params["speakers_expected"] = num_interlocutors
                     elif num_interlocutors > 15: self.worker_signals.message.emit("⚠️ Aviso: AssemblyAI suporta no máximo 15 interlocutores. Usando detecção automática.")
 

@@ -76,6 +76,14 @@ def main():
             )
         )
         return 1
+
+    # Also rewrite the installer_name line (e.g. Kiwiscribe-1.0.0-win64.exe) so the
+    # produced .exe filename matches the new version. Replace whatever x.y.z it
+    # currently carries (it may have drifted from 'version='), not just old_version.
+    installer_re = re.compile(r'(?m)^(installer_name=.*?)\d+\.\d+\.\d+(.*)$')
+    if installer_re.search(new_config):
+        new_config = installer_re.sub(rf'\g<1>{new_version}\g<2>', new_config, count=1)
+
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         f.write(new_config)
 
