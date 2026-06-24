@@ -31,7 +31,7 @@ except Exception:
     generate_word_document = None
     DOCX_GENERATOR_AVAILABLE = False
 
-APP_VERSION = "1.0.1"
+APP_VERSION = "1.0.2"
 
 TRANSCRIPTION_MODELS = {
     "AssemblyAI": [("Universal-3 Pro", "universal-3-pro"), ("Universal-2", "universal-2")],
