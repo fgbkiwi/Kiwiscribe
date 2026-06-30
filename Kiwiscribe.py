@@ -31,7 +31,7 @@ except Exception:
     generate_word_document = None
     DOCX_GENERATOR_AVAILABLE = False
 
-APP_VERSION = "1.0.2"
+APP_VERSION = "1.0.3"
 
 TRANSCRIPTION_MODELS = {
     "AssemblyAI": [("Universal-3 Pro", "universal-3-pro"), ("Universal-2", "universal-2")],
@@ -3668,6 +3668,9 @@ Por favor, forneça uma transcrição completa e detalhada. Responda APENAS com 
                 if selected_service == "JustGenerateDocx":
                     post_processor = None
 
+                post_processing_failed = False
+                post_processing_succeeded = False
+
                 if post_processor:
                       self.worker_signals.message.emit(f"⚙️ Iniciando pós-processamento com {post_processor}...")
                       start_post_time = time.time()
@@ -3679,6 +3682,9 @@ Por favor, forneça uma transcrição completa e detalhada. Responda APENAS com 
                       else:
                            input_base = os.path.splitext(os.path.basename(full_destination_path))[0]
                            post_output_path = os.path.join(output_dir, input_base + post_suffix + ".txt")
+                      self.worker_signals.message.emit(
+                          f"💾 TXT formatado será salvo como: {os.path.basename(post_output_path)}"
+                      )
                       if post_processor == "Claude":
                            result = process_transcript_with_claude(full_destination_path, ata_info, api_key_claude, post_output_path, post_model)
                       elif post_processor == "OpenAI":
@@ -3705,14 +3711,21 @@ Por favor, forneça uma transcrição completa e detalhada. Responda APENAS com 
                       self.worker_signals.message.emit(f"⏱️ Tempo de pós-processamento ({post_processor}): {end_post_time - start_post_time:.2f} segundos.")
 
                       if isinstance(result, str) and result.startswith("Erro"):
-                           self.worker_signals.message.emit(f"⚠️ Pós-processamento com {post_processor} falhou: {result}. O arquivo '{transcript_file_name}' contém a transcrição base.")
-                           # Mantém final_output_path como o arquivo transcrito
+                           post_processing_failed = True
+                           self.worker_signals.message.emit(
+                               f"❌ Pós-processamento com {post_processor} FALHOU:\n{result}\n"
+                               f"O TXT formatado não foi criado. A transcrição bruta permanece em '{transcript_file_name}'."
+                           )
                       elif isinstance(result, str) and os.path.exists(result):
+                           post_processing_succeeded = True
                            self.worker_signals.message.emit(f"✅ Pós-processamento com {post_processor} concluído: {os.path.basename(result)}")
-                           final_output_path = result # Atualiza para o arquivo formatado
+                           final_output_path = result
                       else:
-                           # Caso inesperado
-                            self.worker_signals.message.emit(f"⚠️ Resultado inesperado do pós-processamento com {post_processor}. Verifique os logs.")
+                           post_processing_failed = True
+                           self.worker_signals.message.emit(
+                               f"❌ Resultado inesperado do pós-processamento com {post_processor}. "
+                               "O TXT formatado não foi criado. Verifique os logs."
+                           )
 
                 else: # self.use_none_radio.isChecked()
                       self.worker_signals.message.emit("ℹ️ Nenhum pós-processamento selecionado.")
@@ -3720,11 +3733,35 @@ Por favor, forneça uma transcrição completa e detalhada. Responda APENAS com 
 
                 docx_output_path = None
                 if generate_docx:
-                    if not DOCX_GENERATOR_AVAILABLE:
+                    if post_processor and post_processing_failed:
+                        self.worker_signals.message.emit(
+                            "⚠️ Geração de DOCX ignorada: o pós-processamento falhou e o documento "
+                            "deveria usar a transcrição com interlocutores identificados. "
+                            "Corrija credenciais/limites da API e execute novamente."
+                        )
+                    elif not DOCX_GENERATOR_AVAILABLE:
                         self.worker_signals.message.emit("⚠️ Geração de DOCX solicitada, mas módulo indisponível.")
                     else:
-                        txt_source_for_docx = final_output_path if final_output_path and os.path.exists(final_output_path) else full_destination_path
-                        if not txt_source_for_docx or not os.path.exists(txt_source_for_docx):
+                        usar_txt_formatado = (
+                            post_processor is None
+                            or post_processing_succeeded
+                            or (
+                                final_output_path
+                                and full_destination_path
+                                and os.path.normpath(final_output_path) != os.path.normpath(full_destination_path)
+                                and os.path.exists(final_output_path)
+                            )
+                        )
+                        txt_source_for_docx = (
+                            final_output_path
+                            if usar_txt_formatado and final_output_path and os.path.exists(final_output_path)
+                            else full_destination_path
+                        )
+                        if post_processor and not usar_txt_formatado:
+                            self.worker_signals.message.emit(
+                                "⚠️ Geração de DOCX ignorada: não há TXT formatado disponível."
+                            )
+                        elif not txt_source_for_docx or not os.path.exists(txt_source_for_docx):
                             self.worker_signals.message.emit("⚠️ TXT final não encontrado para gerar DOCX.")
                         else:
                             ata_pdf_path = ata_path if ata_path and ata_path.lower().endswith('.pdf') else None
@@ -3742,10 +3779,17 @@ Por favor, forneça uma transcrição completa e detalhada. Responda APENAS com 
                             except Exception as e:
                                 self.worker_signals.message.emit(f"⚠️ Falha ao gerar DOCX: {e}")
 
-                 # Mensagem final de sucesso
+                 # Mensagem final
                 total_time = time.time() - start_time_workflow
-                self.worker_signals.message.emit(f"\n🎉 Processo concluído com sucesso em {total_time:.2f} segundos!")
-                self.worker_signals.message.emit(f"📄 Arquivo final: {final_output_path}")
+                if post_processing_failed:
+                    self.worker_signals.message.emit(
+                        f"\n⚠️ Processo finalizado com falha no pós-processamento ({total_time:.2f} s). "
+                        "O TXT formatado NÃO foi gerado."
+                    )
+                    self.worker_signals.message.emit(f"📄 Arquivo disponível (transcrição bruta): {full_destination_path}")
+                else:
+                    self.worker_signals.message.emit(f"\n🎉 Processo concluído com sucesso em {total_time:.2f} segundos!")
+                    self.worker_signals.message.emit(f"📄 Arquivo final: {final_output_path}")
 
                 # Mensagem final com detalhes dos arquivos
                 if transcript_success:
