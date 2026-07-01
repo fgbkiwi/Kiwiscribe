@@ -88,8 +88,25 @@ def get_download_dir():
         return os.path.expanduser('~')
 
 
-    # Fallback final para o diretório de trabalho atual se tudo falhar
-    return os.getcwd()
+def resolve_app_asset_path(filename):
+    """Localiza recursos estáticos (logo, ícone) no desenvolvimento e no instalador."""
+    search_dirs = []
+    module_dir = os.path.dirname(os.path.abspath(__file__))
+    search_dirs.append(module_dir)
+    if getattr(sys, "frozen", False):
+        exe_dir = os.path.dirname(os.path.abspath(sys.executable))
+        if exe_dir not in search_dirs:
+            search_dirs.append(exe_dir)
+    argv0 = sys.argv[0] if sys.argv else ""
+    if argv0:
+        launcher_dir = os.path.dirname(os.path.abspath(argv0))
+        if launcher_dir and launcher_dir not in search_dirs:
+            search_dirs.append(launcher_dir)
+    for base_dir in search_dirs:
+        candidate = os.path.join(base_dir, filename)
+        if os.path.isfile(candidate):
+            return candidate
+    return os.path.join(module_dir, filename)
 
 
 # Arquivo para armazenar as API Keys
@@ -1534,8 +1551,8 @@ class TranscriptionWindow(QMainWindow):
         super().__init__()
 
         self.app_dir = os.path.dirname(os.path.abspath(__file__))
-        self.logo_image_path = os.path.join(self.app_dir, "KiwiScribeSquared.png")
-        self.installer_icon_path = os.path.join(self.app_dir, "KiwiScribeSquared.ico")
+        self.logo_image_path = resolve_app_asset_path("KiwiScribeSquared.png")
+        self.installer_icon_path = resolve_app_asset_path("KiwiScribeSquared.ico")
 
         self.setWindowTitle("Transcrição e Pós-Processamento de Audiências Trabalhistas")
         self.setMinimumSize(850, 750)
@@ -1614,34 +1631,41 @@ class TranscriptionWindow(QMainWindow):
         transcription_model_group.addWidget(self.transcription_model_combo)
         transcription_model_group.addStretch()
         service_group_layout.addLayout(transcription_model_group)
-        left_section_layout.addWidget(service_group)
+
+        service_section_widget = QWidget()
+        service_section_layout = QHBoxLayout(service_section_widget)
+        service_section_layout.setContentsMargins(0, 0, 0, 0)
+        service_section_layout.setSpacing(12)
+        service_section_layout.addWidget(service_group, 1)
 
         logo_panel = QWidget()
         logo_panel_layout = QVBoxLayout(logo_panel)
         logo_panel_layout.setContentsMargins(0, 0, 0, 0)
         logo_panel_layout.setSpacing(0)
         logo_panel.setFixedWidth(110)
-
         logo_panel_layout.addStretch()
-        if os.path.exists(self.logo_image_path):
-            top_logo_label = QLabel()
-            top_logo_pixmap = QPixmap(self.logo_image_path)
-            if not top_logo_pixmap.isNull():
-                top_logo_label.setPixmap(
-                    top_logo_pixmap.scaled(
-                        92,
-                        92,
-                        Qt.AspectRatioMode.KeepAspectRatio,
-                        Qt.TransformationMode.SmoothTransformation,
-                    )
+        self.top_logo_label = QLabel()
+        self.top_logo_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.top_logo_label.setToolTip("KiwiScribe")
+        top_logo_pixmap = QPixmap(self.logo_image_path)
+        if not top_logo_pixmap.isNull():
+            self.top_logo_label.setPixmap(
+                top_logo_pixmap.scaled(
+                    92,
+                    92,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
                 )
-                top_logo_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                top_logo_label.setToolTip("KiwiScribe")
-                logo_panel_layout.addWidget(top_logo_label)
+            )
+            logo_panel_layout.addWidget(self.top_logo_label)
+        else:
+            print(f"Aviso: logo não encontrado em {self.logo_image_path}")
         logo_panel_layout.addStretch()
+        service_section_layout.addWidget(logo_panel, 0)
+
+        left_section_layout.addWidget(service_section_widget)
 
         top_section_layout.addWidget(left_section_widget, 1)
-        top_section_layout.addWidget(logo_panel, 0)
         controls_layout.addWidget(top_section_widget)
 
         # --- 2. Arquivos de Entrada ---
