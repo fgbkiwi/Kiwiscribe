@@ -31,10 +31,10 @@ except Exception:
     generate_word_document = None
     DOCX_GENERATOR_AVAILABLE = False
 
-APP_VERSION = "1.0.5"
+APP_VERSION = "1.0.7"
 
 TRANSCRIPTION_MODELS = {
-    "AssemblyAI": [("Universal-3 Pro", "universal-3-pro"), ("Universal-2", "universal-2")],
+    "AssemblyAI": [("Universal-3.5 Pro", "universal-3-5-pro"), ("Universal-3 Pro", "universal-3-pro"), ("Universal-2", "universal-2")],
     "gpt-4o-transcribe": [("gpt-4o-transcribe", "gpt-4o-transcribe"), ("gpt-4o-mini-transcribe", "gpt-4o-mini-transcribe"), ("whisper-1", "whisper-1")],
     "Gemini": [("gemini-2.5-flash", "gemini-2.5-flash"), ("gemini-2.5-pro", "gemini-2.5-pro")],
     "OpenRouter": [("Gemini 2.5 Flash", "google/gemini-2.5-flash"), ("Gemini 2.5 Pro", "google/gemini-2.5-pro"), ("GPT-4o Audio", "openai/gpt-4o-audio-preview")],
@@ -3510,7 +3510,7 @@ Por favor, forneça uma transcrição completa e detalhada. Responda APENAS com 
                     if 0 < num_interlocutors <= 15: config_params["speakers_expected"] = num_interlocutors
                     elif num_interlocutors > 15: self.worker_signals.message.emit("⚠️ Aviso: AssemblyAI suporta no máximo 15 interlocutores. Usando detecção automática.")
 
-                    # Speaker Identification: nomes da ata como known_values (doc: https://www.assemblyai.com/docs/speech-understanding/speaker-identification)
+                    # Speaker Identification: nomes da ata como speakers (doc: https://www.assemblyai.com/docs/speech-understanding/speaker-identification)
                     if use_speaker_identification:
                         known_values = get_speaker_identification_known_values(ata_info)
                         if known_values:
@@ -3518,7 +3518,7 @@ Por favor, forneça uma transcrição completa e detalhada. Responda APENAS com 
                                 "request": {
                                     "speaker_identification": {
                                         "speaker_type": "name",
-                                        "known_values": known_values
+                                        "speakers": [{"name": name} for name in known_values]
                                     }
                                 }
                             }
