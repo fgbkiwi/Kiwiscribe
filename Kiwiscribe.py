@@ -59,7 +59,7 @@ POST_PROCESSING_MODELS = {
 # (Mantidas como na versão anterior, sem alterações significativas aqui)
 # ... (O código das funções auxiliares permanece o mesmo) ...
 # Verifica qual é a localização (default) da pasta de downloads do usuário
-def get_download_dir():
+def get_download_dir() -> str:
     """Retorna o diretório de downloads padrão do sistema operacional."""
     system = platform.system()
     try:
@@ -86,6 +86,7 @@ def get_download_dir():
         print(f"Erro ao obter diretório de downloads: {e}. Usando diretório do usuário.")
         # Fallback mais seguro para o diretório home do usuário
         return os.path.expanduser('~')
+    return os.path.expanduser('~/Downloads')
 
 
 def resolve_app_asset_path(filename):
@@ -956,7 +957,7 @@ def process_transcript_with_claude(transcript_path, ata_info, api_key, output_pa
         with client.messages.stream(
             model=model_name,
             max_tokens=max_tokens_to_sample,
-            temperature=0.0,
+            extra_body={"temperature": 0.0},
             system="Você é um assistente especialista em Direito Processual do Trabalho brasileiro focado em corrigir a identificação de interlocutores em transcrições de audiências, seguindo regras processuais e informações da ata.",
             messages=[{"role": "user", "content": prompt}]
         ) as stream:
@@ -1032,6 +1033,7 @@ def process_transcript_with_openai(transcript_path, ata_info, api_key, output_pa
             # Retry logic for connection issues
             max_retries = 3
             retry_count = 0
+            response = None
             
             while retry_count < max_retries:
                 try:
@@ -1052,6 +1054,9 @@ def process_transcript_with_openai(transcript_path, ata_info, api_key, output_pa
                         time.sleep(wait_time)
                     else:
                         raise e # Re-raise to be caught by outer except
+
+            if response is None:
+                return f"Erro ao processar com OpenAI ({model_to_use}): falha após {max_retries} tentativas de conexão."
 
             end_openai_time = time.time()
             print(f"OpenAI respondeu em {end_openai_time - start_openai_time:.2f} segundos.")
@@ -1375,8 +1380,8 @@ class FileTableDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle(f"Selecionar Arquivo {'de Áudio' if file_type == 'audio' else 'da Ata'}")
         self.setMinimumSize(700, 450)
-        self.selected_file = None
-        self.current_dir = get_download_dir()  # Diretório inicial
+        self.selected_file: str | None = None
+        self.current_dir: str = get_download_dir()  # Diretório inicial
 
         layout = QVBoxLayoutDialog(self)
 
@@ -1534,7 +1539,7 @@ class FileTableDialog(QDialog):
         else:
             self.reject()
 
-    def get_selected_file(self):
+    def get_selected_file(self) -> str | None:
         """Retorna o caminho completo do arquivo selecionado."""
         return self.selected_file
 
@@ -2731,6 +2736,7 @@ class TranscriptionWindow(QMainWindow):
         audio_file_handle = None
         uploaded_file = None
         temp_file_path = None
+        client = None
         is_local = not (file_path_or_url.startswith('http://') or file_path_or_url.startswith('https://'))
 
         try:
@@ -2861,7 +2867,7 @@ Por favor, forneça uma transcrição completa e detalhada."""
             print(f"Traceback Gemini Transcription Error:\n{traceback.format_exc()}")
             return False
         finally:
-             if uploaded_file:
+             if uploaded_file and client is not None:
                   try:
                        display_name = uploaded_file.display_name or "arquivo"
                        worker_signals.message.emit(f"🧹 Limpando arquivo da API Gemini: {display_name}...")
@@ -3024,6 +3030,8 @@ Por favor, forneça uma transcrição completa e detalhada. Responda APENAS com 
         """Realiza a transcricao de audio usando o SDK oficial do Soniox (corrige problema de espacamento em tokens pt-BR)."""
         try:
             # 1. Importar SDK oficial do Soniox (instalado via pip install soniox)
+            SonioxClient = None
+            CreateTranscriptionConfig = None
             try:
                 from soniox import SonioxClient
                 from soniox.types import CreateTranscriptionConfig
@@ -3040,7 +3048,7 @@ Por favor, forneça uma transcrição completa e detalhada. Responda APENAS com 
             is_url = file_path_or_url.startswith('http://') or file_path_or_url.startswith('https://')
 
             # 2. ABORDAGEM PREFERIDA: SDK oficial (evita problema de espaçamento)
-            if use_sdk:
+            if use_sdk and SonioxClient is not None and CreateTranscriptionConfig is not None:
                 worker_signals.message.emit("🧠 Iniciando transcrição com SDK Soniox...")
                 
                 # Criar cliente do SDK
@@ -3471,6 +3479,7 @@ Por favor, forneça uma transcrição completa e detalhada. Responda APENAS com 
             # --- 3. Transcrição (AssemblyAI, OpenAI ou Gemini) --- MODIFICADO
             transcript_success = False
 
+            start_transcription_time = None
             if selected_service in ("JustPostProcess", "JustGenerateDocx"):
                 if selected_service == "JustGenerateDocx":
                     self.worker_signals.message.emit("⏩ Pulando transcrição e pós-processamento (Modo Apenas Gerar DOCX selecionado).")
@@ -3573,6 +3582,7 @@ Por favor, forneça uma transcrição completa e detalhada. Responda APENAS com 
                         # Implementar retry com backoff exponencial para erros 500
                         max_retries = 3
                         retry_count = 0
+                        response = None
                         
                         while retry_count < max_retries:
                             try:
@@ -3600,9 +3610,9 @@ Por favor, forneça uma transcrição completa e detalhada. Responda APENAS com 
                                     # Outros erros de status, não tenta novamente
                                     raise status_error
                         
-                        if retry_count < max_retries:  # Sucesso
+                        if retry_count < max_retries and response is not None:  # Sucesso
                             # With "json" format, the response has a different structure
-                            if response and hasattr(response, 'text') and response.text:
+                            if hasattr(response, 'text') and response.text:
                                 # Simple format - just the transcribed text without timestamps
                                 transcribed_text = response.text.strip()
                                 with open(full_destination_path, 'w', encoding='utf-8') as file:
@@ -3676,7 +3686,7 @@ Por favor, forneça uma transcrição completa e detalhada. Responda APENAS com 
 
 
             end_transcription_time = time.time()
-            if selected_service not in ("JustPostProcess", "JustGenerateDocx") and 'start_transcription_time' in locals():
+            if selected_service not in ("JustPostProcess", "JustGenerateDocx") and start_transcription_time is not None:
                 self.worker_signals.message.emit(f"⏱️ Tempo de transcrição ({selected_service}): {end_transcription_time - start_transcription_time:.2f} segundos.")
 
 
@@ -3763,7 +3773,7 @@ Por favor, forneça uma transcrição completa e detalhada. Responda APENAS com 
                             "deveria usar a transcrição com interlocutores identificados. "
                             "Corrija credenciais/limites da API e execute novamente."
                         )
-                    elif not DOCX_GENERATOR_AVAILABLE:
+                    elif generate_word_document is None:
                         self.worker_signals.message.emit("⚠️ Geração de DOCX solicitada, mas módulo indisponível.")
                     else:
                         usar_txt_formatado = (
