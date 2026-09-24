@@ -12,7 +12,9 @@ set "VENV_PATH="
 set "ICON_SRC=KiwiScribeSquared.png"
 set "ICON_OUT=KiwiScribeSquared.ico"
 
-if exist "venv_win\Scripts\activate.bat" (
+if exist ".venv\Scripts\activate.bat" (
+    set "VENV_PATH=.venv"
+) else if exist "venv_win\Scripts\activate.bat" (
     set "VENV_PATH=venv_win"
 ) else if exist "venv\Scripts\activate.bat" (
     set "VENV_PATH=venv"
@@ -30,24 +32,37 @@ if defined VENV_PATH (
     echo No virtual environment found. Using system Python.
 )
 
+where uv >nul 2>nul
+if errorlevel 1 (
+    echo.
+    echo ERROR: 'uv' was not found on PATH.
+    echo Install from https://docs.astral.sh/uv/ then retry.
+    goto :error_exit
+)
+
 rem Bump the app version (default: patch) before building so the installer and
 rem Kiwiscribe.py carry the new number. Override with: build_installer.bat minor
+rem Skip the bump with: build_installer.bat nobump
 set "VERSION_PART=%~1"
 if "%VERSION_PART%"=="" set "VERSION_PART=patch"
-echo Bumping app version (%VERSION_PART%)...
+if /I "%VERSION_PART%"=="nobump" (
+    echo Keeping current app version [nobump]...
+) else (
+    echo Bumping app version [%VERSION_PART%]...
+)
 for /f "usebackq delims=" %%V in (`"%PYTHON_EXE%" bump_version.py %VERSION_PART%`) do set "NEW_VERSION=%%V"
 if not defined NEW_VERSION (
     echo.
-    echo ERROR: Failed to bump app version.
+    echo ERROR: Failed to resolve app version.
     goto :error_exit
 )
-echo New app version is %NEW_VERSION%
+echo App version for this build is %NEW_VERSION%
 
 echo Verifying pynsist installation...
 "%PYTHON_EXE%" -c "import nsist" >nul 2>nul
 if errorlevel 1 (
     echo pynsist not found. Installing it now...
-    "%PYTHON_EXE%" -m pip install pynsist
+    uv pip install pynsist --python "%PYTHON_EXE%"
     if errorlevel 1 (
         echo.
         echo ERROR: Failed to install pynsist.
@@ -68,7 +83,7 @@ echo Verifying Pillow for icon generation...
 "%PYTHON_EXE%" -c "from PIL import Image" >nul 2>nul
 if errorlevel 1 (
     echo Pillow not found. Installing it now...
-    "%PYTHON_EXE%" -m pip install pillow
+    uv pip install pillow --python "%PYTHON_EXE%"
     if errorlevel 1 (
         echo.
         echo ERROR: Failed to install Pillow.
@@ -82,6 +97,18 @@ if errorlevel 1 (
     echo.
     echo ERROR: Failed to generate installer icon.
     goto :error_exit
+)
+
+rem uv has no 'pip download'; bootstrap pip only for fetching installer wheels.
+echo Ensuring pip is available for wheel download...
+"%PYTHON_EXE%" -c "import pip" >nul 2>nul
+if errorlevel 1 (
+    uv pip install pip --python "%PYTHON_EXE%"
+    if errorlevel 1 (
+        echo.
+        echo ERROR: Failed to install pip into the virtual environment.
+        goto :error_exit
+    )
 )
 
 echo Downloading runtime wheels...
@@ -119,6 +146,11 @@ echo INSTALLER BUILD SUCCESSFUL!
 echo ========================================
 echo Installer output is in build\nsis
 set "BUILD_RC=0"
+
+rem Publish the installer as a GitHub Release asset so users can download it
+rem without cloning the repo. Only the version bump files are committed/pushed
+rem (not other pending local changes).
+call :publish_github_release
 goto :cleanup
 
 :error_exit
@@ -133,3 +165,78 @@ echo.
 echo Press any key to exit...
 pause >nul
 endlocal & exit /b %BUILD_RC%
+
+:publish_github_release
+echo.
+echo ----------------------------------------
+echo Publishing installer to GitHub Releases
+echo ----------------------------------------
+
+set "INSTALLER_FILE=build\nsis\Kiwiscribe-%NEW_VERSION%-win64.exe"
+if not exist "%INSTALLER_FILE%" (
+    set "INSTALLER_FILE="
+    for %%F in ("build\nsis\*.exe") do set "INSTALLER_FILE=%%~fF"
+)
+if not defined INSTALLER_FILE (
+    echo WARNING: Installer .exe not found for GitHub release upload.
+    goto :eof
+)
+for %%F in ("%INSTALLER_FILE%") do set "INSTALLER_FILE=%%~fF"
+
+where gh >nul 2>nul
+if errorlevel 1 (
+    echo WARNING: GitHub CLI ^(gh^) not found. Installer was built but not published.
+    echo Install from https://cli.github.com/ then run: gh auth login
+    goto :eof
+)
+
+gh auth status >nul 2>nul
+if errorlevel 1 (
+    echo WARNING: gh is not authenticated. Installer was built but not published.
+    echo Run: gh auth login
+    goto :eof
+)
+
+set "RELEASE_TAG=v%NEW_VERSION%"
+
+echo Committing version bump ^(Kiwiscribe.py, kiwiscribe_installer.cfg^)...
+git add -- "Kiwiscribe.py" "kiwiscribe_installer.cfg"
+git diff --cached --quiet
+if errorlevel 1 (
+    git commit -m "release: Kiwiscribe %NEW_VERSION%"
+    if errorlevel 1 (
+        echo WARNING: Failed to commit version bump. Continuing with release publish...
+    ) else (
+        echo Pushing version bump to origin...
+        git push origin HEAD
+        if errorlevel 1 (
+            echo WARNING: git push failed. The release tag may point at an older commit.
+        )
+    )
+) else (
+    echo No pending version-file changes to commit.
+)
+
+echo Publishing GitHub release %RELEASE_TAG% with:
+echo   %INSTALLER_FILE%
+
+gh release view "%RELEASE_TAG%" >nul 2>nul
+if errorlevel 1 (
+    gh release create "%RELEASE_TAG%" "%INSTALLER_FILE%" --title "Kiwiscribe %NEW_VERSION%" --generate-notes
+) else (
+    echo Release %RELEASE_TAG% already exists. Updating installer asset...
+    gh release upload "%RELEASE_TAG%" "%INSTALLER_FILE%" --clobber
+)
+if errorlevel 1 (
+    echo WARNING: Failed to publish GitHub release %RELEASE_TAG%.
+    echo Local installer is still available at:
+    echo   %INSTALLER_FILE%
+    goto :eof
+)
+
+echo.
+echo GitHub release published successfully: %RELEASE_TAG%
+for /f "usebackq delims=" %%U in (`gh release view "%RELEASE_TAG%" --json url -q .url 2^>nul`) do (
+    echo Release URL: %%U
+)
+goto :eof

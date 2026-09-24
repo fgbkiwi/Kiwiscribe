@@ -242,6 +242,142 @@ def insert_paragraph_after(paragraph, text, style=None):
         new_para.style = style
     return new_para
 
+def _delete_paragraph(paragraph):
+    """Remove um parágrafo do documento via XML."""
+    element = paragraph._element
+    parent = element.getparent()
+    if parent is not None:
+        parent.remove(element)
+
+# Revisão final: une falas consecutivas do mesmo interlocutor
+_TS = r'\d{1,2}:\d{2}(?::\d{2})?'
+_SPEECH_THREE_RE = re.compile(rf'^\[({_TS})\]\s*([^:]+?)\s*:\s*([^:]+?)\s*:\s*(.*)$')
+_SPEECH_TWO_RE = re.compile(rf'^\[({_TS})\]\s*([^:]+?)\s*:\s*(.*)$')
+
+def _parse_speech_paragraph(text):
+    """Extrai carimbo, interlocutor e texto de um parágrafo de fala, ou None."""
+    if not text:
+        return None
+    line = text.strip()
+    if not line:
+        return None
+
+    m3 = _SPEECH_THREE_RE.match(line)
+    if m3:
+        time_str, role, name, speech = m3.groups()
+        role, name = role.strip(), name.strip()
+        return {
+            'time': time_str,
+            'role': role,
+            'name': name,
+            'format': 'three',
+            'speaker_key': (role.casefold(), name.casefold()),
+            'text': speech.strip(),
+        }
+
+    m2 = _SPEECH_TWO_RE.match(line)
+    if m2:
+        time_str, role, speech = m2.groups()
+        role = role.strip()
+        return {
+            'time': time_str,
+            'role': role,
+            'name': '',
+            'format': 'two',
+            'speaker_key': (role.casefold(), ''),
+            'text': speech.strip(),
+        }
+
+    return None
+
+def _format_speech_paragraph(parsed):
+    """Reconstrói a linha de fala a partir do dicionário parseado."""
+    if parsed['format'] == 'three':
+        return f"[{parsed['time']}] {parsed['role']}: {parsed['name']}: {parsed['text']}"
+    return f"[{parsed['time']}] {parsed['role']}: {parsed['text']}"
+
+def _join_utterance_texts(left, right):
+    """Une trechos de fala, colando sem espaço quando o split cortou uma palavra."""
+    left = (left or '').rstrip()
+    right = (right or '').strip()
+    if not left:
+        return right
+    if not right:
+        return left
+
+    # Continuação por pontuação ("texto" + ", pois") ou palavra partida ("n" + "ão").
+    if re.match(r'^[.,;:!?…]+', right):
+        return left + right
+    if re.search(r'[\wÀ-ÿ]$', left) and re.match(r'^[a-zà-ÿ]', right):
+        return left + right
+    return f'{left} {right}'
+
+def merge_consecutive_speaker_lines(lines):
+    """Junta linhas consecutivas do mesmo interlocutor em uma só."""
+    if not lines:
+        return []
+
+    merged = []
+    current = None
+
+    for line in lines:
+        parsed = _parse_speech_paragraph(line)
+        if parsed is None:
+            if current is not None:
+                merged.append(_format_speech_paragraph(current))
+                current = None
+            merged.append(line)
+            continue
+
+        if current is not None and current['speaker_key'] == parsed['speaker_key']:
+            current['text'] = _join_utterance_texts(current['text'], parsed['text'])
+        else:
+            if current is not None:
+                merged.append(_format_speech_paragraph(current))
+            current = parsed
+
+    if current is not None:
+        merged.append(_format_speech_paragraph(current))
+    return merged
+
+def merge_consecutive_speaker_paragraphs_in_document(doc, logger=None):
+    """Revisão final do DOCX: funde parágrafos consecutivos do mesmo interlocutor."""
+    log = logger if callable(logger) else (lambda *_a, **_k: None)
+    merges = 0
+
+    i = 0
+    while True:
+        paragraphs = list(doc.paragraphs)
+        if i >= len(paragraphs):
+            break
+
+        parsed = _parse_speech_paragraph(paragraphs[i].text)
+        if parsed is None:
+            i += 1
+            continue
+
+        j = i + 1
+        while j < len(paragraphs):
+            next_parsed = _parse_speech_paragraph(paragraphs[j].text)
+            if next_parsed is None or next_parsed['speaker_key'] != parsed['speaker_key']:
+                break
+            parsed['text'] = _join_utterance_texts(parsed['text'], next_parsed['text'])
+            j += 1
+
+        if j > i + 1:
+            paragraphs[i].text = _format_speech_paragraph(parsed)
+            for k in range(i + 1, j):
+                _delete_paragraph(paragraphs[k])
+            merges += j - i - 1
+
+        i += 1
+
+    if merges:
+        log(f"Revisão final: {merges} parágrafo(s) consecutivos do mesmo interlocutor unidos.")
+    else:
+        log("Revisão final: nenhum parágrafo consecutivo do mesmo interlocutor para unir.")
+    return merges
+
 def insert_paragraphs_at_bookmark(doc, bookmark_name, text_lines):
     target_para = None
     for p in doc.paragraphs:
@@ -740,6 +876,9 @@ def generate_word_document(transcript_path, ata_pdf_path=None, output_dir=None, 
 
     raw_lines = [l.strip() for l in transcript_content.split('\n') if l.strip()]
     insert_paragraphs_at_bookmark(doc, "Rascunho", raw_lines)
+
+    log("Aplicando revisão final: unindo falas consecutivas do mesmo interlocutor...")
+    merge_consecutive_speaker_paragraphs_in_document(doc, logger=log)
 
     output_filename = f"{proc_no} degravação.docx"
     output_path = os.path.join(target_dir, output_filename)

@@ -6,10 +6,12 @@ value back to both ``Kiwiscribe.py`` and ``kiwiscribe_installer.cfg`` so the
 built installer always carries the bumped version.
 
 Usage:
-    python bump_version.py [patch|minor|major]
+    python bump_version.py [patch|minor|major|nobump]
 
-On success the new version is printed to stdout (so the build script can capture
-it) and the exit code is 0.
+With ``nobump``, the current version is printed unchanged (no files written).
+
+On success the new (or current) version is printed to stdout (so the build script
+can capture it) and the exit code is 0.
 """
 import os
 import re
@@ -34,9 +36,9 @@ def bump(version_tuple, part):
 
 def main():
     part = (sys.argv[1] if len(sys.argv) > 1 else "patch").lower()
-    if part not in ("major", "minor", "patch"):
+    if part not in ("major", "minor", "patch", "nobump"):
         sys.stderr.write(
-            "ERROR: version component must be one of: major, minor, patch\n"
+            "ERROR: version component must be one of: major, minor, patch, nobump\n"
         )
         return 2
 
@@ -51,6 +53,12 @@ def main():
         return 1
 
     old_version = f"{match.group(2)}.{match.group(3)}.{match.group(4)}"
+
+    if part == "nobump":
+        sys.stderr.write(f"Version unchanged (nobump): {old_version}\n")
+        print(old_version)
+        return 0
+
     new_tuple = bump((int(match.group(2)), int(match.group(3)), int(match.group(4))), part)
     new_version = "{}.{}.{}".format(*new_tuple)
 

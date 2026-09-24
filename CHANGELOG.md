@@ -10,9 +10,11 @@
 - Build: `build_installer.bat` passa a incrementar automaticamente a versão do app antes
   de cada build, seguindo versionamento semântico (padrão: `patch`). Use
   `build_installer.bat minor` ou `build_installer.bat major` para os demais incrementos.
+  Use `build_installer.bat nobump` para gerar o instalador sem alterar a versão.
 - Adicionado `bump_version.py`: fonte única da versão é `APP_VERSION` em `Kiwiscribe.py`;
   o script incrementa e sincroniza a versão em `Kiwiscribe.py` e `kiwiscribe_installer.cfg`
-  (a versão do `[Python]` no `.cfg` não é alterada).
+  (a versão do `[Python]` no `.cfg` não é alterada). Aceita também `nobump` para só
+  reportar a versão atual.
 
 - Segurança: removida a API Key da AssemblyAI embutida no código-fonte; a chave passa a
   vir exclusivamente do arquivo `.transcription_config.json` (campo `assembly_ai`) ou da

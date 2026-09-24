@@ -10,7 +10,14 @@ sys.path.insert(0, pkgdir)
 sys.path.insert(0, scriptdir)
 
 
-from Kiwiscribe import QApplication, TranscriptionWindow, cleanup_old_logs, get_log_dir
+from Kiwiscribe import (
+    QApplication,
+    TranscriptionWindow,
+    cleanup_old_logs,
+    finish_splash_screen,
+    get_log_dir,
+    show_splash_screen,
+)
 
 
 def main():
@@ -23,8 +30,9 @@ def main():
     log_dir = get_log_dir()
     cleanup_old_logs(log_dir)
 
+    splash, splash_timer = show_splash_screen(app)
     window = TranscriptionWindow()
-    window.show()
+    finish_splash_screen(app, splash, splash_timer, window)
     sys.exit(app.exec())
 
 

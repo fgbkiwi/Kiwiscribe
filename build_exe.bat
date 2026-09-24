@@ -10,7 +10,9 @@ SET "PYTHON_EXE=python"
 SET "VENV_PATH="
 
 REM --- Find and Activate Virtual Environment ---
-if exist "venv_win\Scripts\activate.bat" (
+if exist ".venv\Scripts\activate.bat" (
+    SET "VENV_PATH=.venv"
+) else if exist "venv_win\Scripts\activate.bat" (
     SET "VENV_PATH=venv_win"
 ) else if exist "venv\Scripts\activate.bat" (
     SET "VENV_PATH=venv"
@@ -33,11 +35,19 @@ echo Checking for PyInstaller using '%PYTHON_EXE%'...
 "%PYTHON_EXE%" -c "import PyInstaller" >nul 2>nul
 if errorlevel 1 (
     echo PyInstaller not found. Attempting to install...
-    "%PYTHON_EXE%" -m pip install pyinstaller
+    where uv >nul 2>nul
+    if errorlevel 1 (
+        echo.
+        echo ERROR: 'uv' was not found on PATH. Cannot install PyInstaller.
+        echo Install from https://docs.astral.sh/uv/ then retry, or run:
+        echo   uv pip install pyinstaller --python "%PYTHON_EXE%"
+        goto :error_exit
+    )
+    uv pip install pyinstaller --python "%PYTHON_EXE%"
     if errorlevel 1 (
         echo.
         echo ERROR: Failed to install PyInstaller.
-        echo Please install it manually by running: "%PYTHON_EXE% -m pip install pyinstaller"
+        echo Please install it manually by running: uv pip install pyinstaller --python "%PYTHON_EXE%"
         goto :error_exit
     )
     echo PyInstaller installed successfully.

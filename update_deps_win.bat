@@ -3,12 +3,13 @@ echo Running Kiwiscribe Safe Dependency Update...
 echo.
 
 REM Activate the virtual environment
-if not exist ".\venv_win\Scripts\activate.bat" (
-	echo [ERROR] Virtual environment not found at .\venv_win\Scripts\activate.bat
+if not exist ".\.venv\Scripts\activate.bat" (
+	echo [ERROR] Virtual environment not found at .\.venv\Scripts\activate.bat
+	echo Create it first, for example: uv venv .venv --python 3.13
 	exit /b 1
 )
 
-call .\venv_win\Scripts\activate.bat
+call .\.venv\Scripts\activate.bat
 if errorlevel 1 (
 	echo [ERROR] Failed to activate virtual environment.
 	exit /b 1

@@ -31,8 +31,7 @@ Também inclui automações para:
 
 - Python 3.13.x (recomendado 3.13.13).
 - Windows 10/11 para build de instalador.
-- Ambiente virtual local (‘venv_win’ no Windows).
-- Internet para chamadas de API e download de dependências.
+- Ambiente virtual local (‘.venv’ no Windows).
 - Internet para chamadas de API e download de dependências.
 
 ## Estrutura de Arquivos Importantes
@@ -47,16 +46,21 @@ Também inclui automações para:
 - ‘kiwiscribe_installer.cfg’: configuração do instalador.
 - ‘kiwiscribe_launcher.py’: launcher para o instalador.
 - ‘CHANGELOG.md’: histórico de versões.
-- ‘BUILD_INSTRUCTIONS.md’: guia de build detalhado.
 
 ## Instalação e Setup
 
 ### 1. Criar/ativar ambiente virtual (Windows)
 
-Se já existir ‘venv_win’, apenas ative:
+Criar o ambiente (com ‘uv’):
 
 ```bat
-venv_win\Scripts\activate
+uv venv .venv --python 3.13
+```
+
+Se já existir ‘.venv’, apenas ative:
+
+```bat
+.venv\Scripts\activate
 ```
 
 Ou use o atalho:
@@ -66,6 +70,12 @@ activate_env.bat
 ```
 
 ### 2. Instalar dependências
+
+```bat
+uv pip install -r requirements_build.txt
+```
+
+Alternativa com pip:
 
 ```bat
 python -m pip install --upgrade pip
@@ -178,12 +188,22 @@ build_installer.bat
 
 Esse fluxo:
 
-- ativa o ‘venv_win’;
+- ativa o ambiente virtual local (‘.venv’, ‘venv_win’ ou equivalentes);
 - incrementa a versão do app automaticamente (padrão: ‘patch’) e sincroniza ‘Kiwiscribe.py’ e ‘kiwiscribe_installer.cfg’;
 - garante pynsist instalado;
 - baixa wheels para ‘installer_wheels’;
 - executa ‘python -m nsist kiwiscribe_installer.cfg’;
-- gera instalador em ‘build\nsis’.
+- gera instalador em ‘build\nsis’;
+- faz commit/push **apenas** do bump de versão (‘Kiwiscribe.py’ e ‘kiwiscribe_installer.cfg’);
+- publica o instalador como asset na release GitHub ‘v\<versão\>’ (via ‘gh’).
+
+Pré-requisitos para a publicação no GitHub:
+
+- [GitHub CLI](https://cli.github.com/) instalado (‘gh’);
+- autenticação: ‘gh auth login’;
+- permissão de push/release no repositório remoto.
+
+Observação: outras modificações locais pendentes **não** são commitadas automaticamente — só os arquivos de versão.
 
 Para escolher o tipo de incremento:
 
@@ -191,11 +211,13 @@ Para escolher o tipo de incremento:
 build_installer.bat            :: 1.0.0 -> 1.0.1 (patch, padrão)
 build_installer.bat minor      :: 1.0.0 -> 1.1.0
 build_installer.bat major      :: 1.0.0 -> 2.0.0
+build_installer.bat nobump     :: mantém a versão atual (sem incrementar)
 ```
 
 Saída esperada:
 
 - ‘build\nsis\Kiwiscribe-<versão>-win64.exe’
+- Release em ‘https://github.com/fgbkiwi/Kiwiscribe/releases’ com o instalador anexado (tag ‘v\<versão\>’)
 
 ## Versionamento
 
@@ -217,7 +239,8 @@ Bump automático:
 - ‘build_installer.bat’ incrementa a versão a cada build (padrão ‘patch’) via ‘bump_version.py’,
   sincronizando ‘Kiwiscribe.py’ e ‘kiwiscribe_installer.cfg’.
 - Use ‘build_installer.bat minor’ ou ‘build_installer.bat major’ para os demais incrementos.
-- Como o bump ocorre a cada execução, re-rodar o build repetidamente continua incrementando o ‘patch’.
+- Use ‘build_installer.bat nobump’ para gerar o instalador sem alterar a versão.
+- Como o bump ocorre a cada execução (exceto com ‘nobump’), re-rodar o build repetidamente continua incrementando o ‘patch’.
 
 Estado atual:
 
@@ -272,7 +295,7 @@ python test_connectivity.py
 - Instale/atualize pynsist no ambiente ativo:
 
 ```bat
-python -m pip install -U pynsist
+uv pip install -U pynsist
 ```
 
 Observação: o pacote chama ‘pynsist’, mas o módulo/entry point usado no build é ‘nsist’.
@@ -313,16 +336,10 @@ rmdir /s /q build\nsis
 ## Roadmap Sugerido
 
 - Criar pipeline CI para build de ‘.exe’ e instalador.
-- Publicar artefatos por release no GitHub.
 - Adicionar testes automatizados para fluxos críticos.
 
 ## Avisos
 
 - Chaves de API são dados sensíveis: não versionar arquivos com credenciais.
 - O executável/instalador pode ficar grande devido ao conjunto de dependências de IA.
-
----
-
-Se quiser, posso gerar em seguida um script de release (ex.: ‘release.bat’) para atualizar versão em todos os pontos automaticamente e reduzir erros manuais de SemVer.
-
 
