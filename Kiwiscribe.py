@@ -132,14 +132,16 @@ class AnimatedSplashScreen(QSplashScreen):
             self._movie = None
 
     def _on_frame_changed(self, _frame_number):
+        if self._movie is None:
+            return
         frame = self._movie.currentPixmap()
         if not frame.isNull():
             self.setPixmap(frame)
 
-    def finish(self, widget):
+    def finish(self, w):
         if self._movie is not None:
             self._movie.stop()
-        super().finish(widget)
+        super().finish(w)
 
 
 def show_splash_screen(app):
