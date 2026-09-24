@@ -17,9 +17,9 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
                              QLabel, QLineEdit, QPushButton, QCheckBox, QTextEdit,
                              QFileDialog, QTableWidget, QTableWidgetItem, QHeaderView,
                              QDialog, QVBoxLayout as QVBoxLayoutDialog, QRadioButton,
-                             QMessageBox, QComboBox)
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject
-from PyQt6.QtGui import QBrush, QColor, QPixmap, QIcon
+                             QMessageBox, QComboBox, QSplashScreen)
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QElapsedTimer
+from PyQt6.QtGui import QBrush, QColor, QPixmap, QIcon, QMovie
 import openai
 from openai import OpenAI
 import google.genai as genai # Import simplificado para Gemini
@@ -31,7 +31,7 @@ except Exception:
     generate_word_document = None
     DOCX_GENERATOR_AVAILABLE = False
 
-APP_VERSION = "1.0.8"
+APP_VERSION = "1.0.9"
 
 TRANSCRIPTION_MODELS = {
     "AssemblyAI": [("Universal-3.5 Pro", "universal-3-5-pro"), ("Universal-3 Pro", "universal-3-pro"), ("Universal-2", "universal-2")],
@@ -108,6 +108,74 @@ def resolve_app_asset_path(filename):
         if os.path.isfile(candidate):
             return candidate
     return os.path.join(module_dir, filename)
+
+
+SPLASH_GIF_FILENAME = "kiwi_scribe.gif"
+SPLASH_MIN_DISPLAY_MS = 2500
+
+
+class AnimatedSplashScreen(QSplashScreen):
+    """Splash com GIF animado via QMovie."""
+
+    def __init__(self, gif_path):
+        initial = QPixmap(gif_path)
+        if initial.isNull():
+            initial = QPixmap(480, 526)
+            initial.fill(QColor("#1a1a1a"))
+        super().__init__(initial)
+        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+        self._movie = QMovie(gif_path)
+        if self._movie.isValid():
+            self._movie.frameChanged.connect(self._on_frame_changed)
+            self._movie.start()
+        else:
+            self._movie = None
+
+    def _on_frame_changed(self, _frame_number):
+        frame = self._movie.currentPixmap()
+        if not frame.isNull():
+            self.setPixmap(frame)
+
+    def finish(self, widget):
+        if self._movie is not None:
+            self._movie.stop()
+        super().finish(widget)
+
+
+def show_splash_screen(app):
+    """Exibe a splash animada e devolve (splash, timer) para controle do tempo mínimo."""
+    gif_path = resolve_app_asset_path(SPLASH_GIF_FILENAME)
+    if not os.path.isfile(gif_path):
+        print(f"Aviso: splash GIF não encontrado em {gif_path}")
+        return None, None
+
+    splash = AnimatedSplashScreen(gif_path)
+    splash.show()
+    app.processEvents()
+
+    timer = QElapsedTimer()
+    timer.start()
+    return splash, timer
+
+
+def finish_splash_screen(app, splash, timer, window, min_display_ms=SPLASH_MIN_DISPLAY_MS):
+    """Fecha a splash após o tempo mínimo, revelando a janela principal."""
+    if splash is None:
+        window.show()
+        return
+
+    elapsed = timer.elapsed() if timer is not None else min_display_ms
+    remaining = max(0, min_display_ms - elapsed)
+
+    def _reveal():
+        window.show()
+        splash.finish(window)
+
+    if remaining > 0:
+        QTimer.singleShot(remaining, _reveal)
+    else:
+        _reveal()
+    app.processEvents()
 
 
 # Arquivo para armazenar as API Keys
@@ -3964,6 +4032,7 @@ if __name__ == '__main__':
     log_dir = get_log_dir()
     cleanup_old_logs(log_dir)
 
+    splash, splash_timer = show_splash_screen(app)
     window = TranscriptionWindow()
-    window.show()
+    finish_splash_screen(app, splash, splash_timer, window)
     sys.exit(app.exec())
