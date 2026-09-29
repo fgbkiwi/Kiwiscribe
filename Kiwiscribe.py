@@ -17,9 +17,10 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
                              QLabel, QLineEdit, QPushButton, QCheckBox, QTextEdit,
                              QFileDialog, QTableWidget, QTableWidgetItem, QHeaderView,
                              QDialog, QVBoxLayout as QVBoxLayoutDialog, QRadioButton,
-                             QMessageBox, QComboBox, QSplashScreen)
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QElapsedTimer
-from PyQt6.QtGui import QBrush, QColor, QPixmap, QIcon, QMovie
+                             QMessageBox, QComboBox)
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject
+from PyQt6.QtGui import QBrush, QColor, QPixmap, QIcon
+from kiwiscribe_splash import SPLASH_GIF_FILENAME, finish_splash_screen, show_splash_screen
 import openai
 from openai import OpenAI
 import google.genai as genai # Import simplificado para Gemini
@@ -31,7 +32,7 @@ except Exception:
     generate_word_document = None
     DOCX_GENERATOR_AVAILABLE = False
 
-APP_VERSION = "1.0.9"
+APP_VERSION = "1.0.10"
 
 TRANSCRIPTION_MODELS = {
     "AssemblyAI": [("Universal-3.5 Pro", "universal-3-5-pro"), ("Universal-3 Pro", "universal-3-pro"), ("Universal-2", "universal-2")],
@@ -108,76 +109,6 @@ def resolve_app_asset_path(filename):
         if os.path.isfile(candidate):
             return candidate
     return os.path.join(module_dir, filename)
-
-
-SPLASH_GIF_FILENAME = "kiwi_scribe.gif"
-SPLASH_MIN_DISPLAY_MS = 2500
-
-
-class AnimatedSplashScreen(QSplashScreen):
-    """Splash com GIF animado via QMovie."""
-
-    def __init__(self, gif_path):
-        initial = QPixmap(gif_path)
-        if initial.isNull():
-            initial = QPixmap(480, 526)
-            initial.fill(QColor("#1a1a1a"))
-        super().__init__(initial)
-        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
-        self._movie = QMovie(gif_path)
-        if self._movie.isValid():
-            self._movie.frameChanged.connect(self._on_frame_changed)
-            self._movie.start()
-        else:
-            self._movie = None
-
-    def _on_frame_changed(self, _frame_number):
-        if self._movie is None:
-            return
-        frame = self._movie.currentPixmap()
-        if not frame.isNull():
-            self.setPixmap(frame)
-
-    def finish(self, w):
-        if self._movie is not None:
-            self._movie.stop()
-        super().finish(w)
-
-
-def show_splash_screen(app):
-    """Exibe a splash animada e devolve (splash, timer) para controle do tempo mínimo."""
-    gif_path = resolve_app_asset_path(SPLASH_GIF_FILENAME)
-    if not os.path.isfile(gif_path):
-        print(f"Aviso: splash GIF não encontrado em {gif_path}")
-        return None, None
-
-    splash = AnimatedSplashScreen(gif_path)
-    splash.show()
-    app.processEvents()
-
-    timer = QElapsedTimer()
-    timer.start()
-    return splash, timer
-
-
-def finish_splash_screen(app, splash, timer, window, min_display_ms=SPLASH_MIN_DISPLAY_MS):
-    """Fecha a splash após o tempo mínimo, revelando a janela principal."""
-    if splash is None:
-        window.show()
-        return
-
-    elapsed = timer.elapsed() if timer is not None else min_display_ms
-    remaining = max(0, min_display_ms - elapsed)
-
-    def _reveal():
-        window.show()
-        splash.finish(window)
-
-    if remaining > 0:
-        QTimer.singleShot(remaining, _reveal)
-    else:
-        _reveal()
-    app.processEvents()
 
 
 # Arquivo para armazenar as API Keys
@@ -1622,6 +1553,8 @@ class WorkerSignals(QObject):
 
 # --- Classe Principal da Janela (TranscriptionWindow) ---
 class TranscriptionWindow(QMainWindow):
+    remote_models_ready = pyqtSignal(str, str, object)  # purpose, provider, models
+
     def __init__(self):
         super().__init__()
 
@@ -1629,7 +1562,7 @@ class TranscriptionWindow(QMainWindow):
         self.logo_image_path = resolve_app_asset_path("KiwiScribeSquared.png")
         self.installer_icon_path = resolve_app_asset_path("KiwiScribeSquared.ico")
 
-        self.setWindowTitle("Transcrição e Pós-Processamento de Audiências Trabalhistas")
+        self.setWindowTitle(f"Transcrição e Pós-Processamento de Audiências Trabalhistas — KiwiScribe v{APP_VERSION}")
         self.setMinimumSize(850, 750)
         if os.path.exists(self.installer_icon_path):
             self.setWindowIcon(QIcon(self.installer_icon_path))
@@ -1735,6 +1668,11 @@ class TranscriptionWindow(QMainWindow):
             logo_panel_layout.addWidget(self.top_logo_label)
         else:
             print(f"Aviso: logo não encontrado em {self.logo_image_path}")
+        self.version_label = QLabel(f"v{APP_VERSION}")
+        self.version_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.version_label.setToolTip(f"KiwiScribe versão {APP_VERSION}")
+        self.version_label.setStyleSheet("color: #777; font-size: 11px;")
+        logo_panel_layout.addWidget(self.version_label)
         logo_panel_layout.addStretch()
         service_section_layout.addWidget(logo_panel, 0)
 
@@ -2009,6 +1947,8 @@ class TranscriptionWindow(QMainWindow):
         self.model_cache = {}
         self._last_transcription_provider = None
         self._last_post_provider = None
+        self._startup_loading = False
+        self.remote_models_ready.connect(self._apply_remote_models)
 
         # --- Conectar sinais aos slots --- MODIFICADO
         self.service_assembly.toggled.connect(self._on_transcription_provider_toggled)
@@ -2048,11 +1988,14 @@ class TranscriptionWindow(QMainWindow):
 
         self.update_ui_visibility() # Inicializar visibilidade
         # Carregar configurações salvas (última sessão)
+        self._startup_loading = True
         self.load_settings()
-        # Atualiza modelos automaticamente no início para os provedores selecionados.
-        self._refresh_model_combos(fetch_remote=True)
+        self._startup_loading = False
+        self._refresh_model_combos()
         self._last_transcription_provider = self._current_transcription_service()
         self._last_post_provider = self._current_post_provider()
+        # As APIs de modelos podem levar até o timeout; buscar fora da thread da UI.
+        self._refresh_model_combos_async()
 
     def _on_speaker_identification_toggled(self, state):
         """Ao marcar Speaker Identification, seleciona automaticamente 'Nenhum (Apenas Transcrever)' no pós-processamento."""
@@ -2190,7 +2133,8 @@ class TranscriptionWindow(QMainWindow):
             return False
         return any(token in model_id for token in ('gpt', 'claude', 'gemini', 'llama', 'qwen', 'mistral', 'deepseek', 'o1', 'o3', 'o4'))
 
-    def _fetch_openrouter_models(self, api_key, purpose):
+    def _fetch_openrouter_models(self, api_key, purpose, notify=None):
+        notify = notify or self.update_message_box
         headers = {
             "Authorization": f"Bearer {api_key}",
             "HTTP-Referer": "https://kiwiscribe.local",
@@ -2237,7 +2181,7 @@ class TranscriptionWindow(QMainWindow):
         normalized = sorted([(label, value) for value, label in deduped.items()], key=lambda x: x[0].lower())
         max_items = 250
         if len(normalized) > max_items:
-            self.update_message_box(f"ℹ️ OpenRouter: lista filtrada contém {len(normalized)} modelos. Mostrando os {max_items} primeiros para manter a UI responsiva.")
+            notify(f"ℹ️ OpenRouter: lista filtrada contém {len(normalized)} modelos. Mostrando os {max_items} primeiros para manter a UI responsiva.")
             normalized = normalized[:max_items]
         return normalized
 
@@ -2254,19 +2198,22 @@ class TranscriptionWindow(QMainWindow):
             )
         return f"⚠️ Falha ao atualizar modelos de {provider}: {error}."
 
-    def _get_models_for_provider(self, provider, purpose, fetch_remote=False):
+    def _get_models_for_provider(self, provider, purpose, fetch_remote=False, api_key=None, notify=None):
+        """``api_key``/``notify`` permitem chamar fora da thread da UI sem tocar nos widgets."""
+        notify = notify or self.update_message_box
         cache_key = (provider, purpose)
         fallback = self._fallback_models(provider, purpose)
         if not fetch_remote and cache_key in self.model_cache:
             return self.model_cache[cache_key]
         if not fetch_remote:
             return fallback
-        api_key = self._get_provider_key(provider, purpose)
+        if api_key is None:
+            api_key = self._get_provider_key(provider, purpose)
         if provider in ("AssemblyAI", "Soniox", "JustPostProcess", "JustGenerateDocx", "None"):
-            self.update_message_box(f"ℹ️ {provider}: usando lista local de modelos/serviços disponíveis.")
+            notify(f"ℹ️ {provider}: usando lista local de modelos/serviços disponíveis.")
             return fallback
         if not api_key:
-            self.update_message_box(f"⚠️ Informe a API Key de {provider} para atualizar modelos em tempo real. Usando lista local.")
+            notify(f"⚠️ Informe a API Key de {provider} para atualizar modelos em tempo real. Usando lista local.")
             return fallback
         try:
             if provider in ("gpt-4o-transcribe", "OpenAI"):
@@ -2276,18 +2223,44 @@ class TranscriptionWindow(QMainWindow):
             elif provider == "Gemini":
                 models = self._fetch_google_models(api_key, purpose)
             elif provider == "OpenRouter":
-                models = self._fetch_openrouter_models(api_key, purpose)
+                models = self._fetch_openrouter_models(api_key, purpose, notify=notify)
             else:
                 models = fallback
             if not models:
-                self.update_message_box(f"⚠️ {provider}: nenhum modelo compatível retornado pela API. Usando lista local.")
+                notify(f"⚠️ {provider}: nenhum modelo compatível retornado pela API. Usando lista local.")
                 return fallback
             self.model_cache[cache_key] = models
-            self.update_message_box(f"✅ {provider}: {len(models)} modelo(s) carregado(s) em tempo real.")
+            notify(f"✅ {provider}: {len(models)} modelo(s) carregado(s) em tempo real.")
             return models
         except Exception as e:
-            self.update_message_box(f"{self._build_model_refresh_error_message(provider, e)} Usando lista local.")
+            notify(f"{self._build_model_refresh_error_message(provider, e)} Usando lista local.")
             return fallback
+
+    def _refresh_model_combos_async(self):
+        jobs = [
+            (purpose, provider, self._get_provider_key(provider, purpose))
+            for purpose, provider in (
+                ('transcription', self._current_transcription_service()),
+                ('post', self._current_post_provider()),
+            )
+        ]
+
+        def worker():
+            for purpose, provider, api_key in jobs:
+                models = self._get_models_for_provider(
+                    provider, purpose, fetch_remote=True, api_key=api_key,
+                    notify=self.worker_signals.message.emit,
+                )
+                self.remote_models_ready.emit(purpose, provider, models)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _apply_remote_models(self, purpose, provider, models):
+        if purpose == 'transcription':
+            if provider == self._current_transcription_service():
+                self._populate_combo(self.transcription_model_combo, models)
+        elif provider == self._current_post_provider():
+            self._populate_combo(self.post_model_combo, models)
 
     def _refresh_model_combos(self, fetch_remote=False, target=None):
         transcription_provider = self._current_transcription_service()
@@ -2308,7 +2281,7 @@ class TranscriptionWindow(QMainWindow):
             return
         self.update_ui_visibility()
         current_provider = self._current_transcription_service()
-        if current_provider != self._last_transcription_provider:
+        if current_provider != self._last_transcription_provider and not self._startup_loading:
             self._refresh_model_combos(fetch_remote=True, target='transcription')
             self._last_transcription_provider = current_provider
 
@@ -2317,7 +2290,7 @@ class TranscriptionWindow(QMainWindow):
             return
         self.update_ui_visibility()
         current_provider = self._current_post_provider()
-        if current_provider != self._last_post_provider:
+        if current_provider != self._last_post_provider and not self._startup_loading:
             self._refresh_model_combos(fetch_remote=True, target='post')
             self._last_post_provider = current_provider
 
@@ -4034,7 +4007,7 @@ if __name__ == '__main__':
     log_dir = get_log_dir()
     cleanup_old_logs(log_dir)
 
-    splash, splash_timer = show_splash_screen(app)
+    splash = show_splash_screen(app, resolve_app_asset_path(SPLASH_GIF_FILENAME))
     window = TranscriptionWindow()
-    finish_splash_screen(app, splash, splash_timer, window)
+    finish_splash_screen(splash, window)
     sys.exit(app.exec())
