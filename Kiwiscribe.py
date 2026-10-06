@@ -32,14 +32,18 @@ except Exception:
     generate_word_document = None
     DOCX_GENERATOR_AVAILABLE = False
 
-APP_VERSION = "1.0.10"
+APP_VERSION = "1.0.11"
 
 TRANSCRIPTION_MODELS = {
-    "AssemblyAI": [("Universal-3.5 Pro", "universal-3-5-pro"), ("Universal-3 Pro", "universal-3-pro"), ("Universal-2", "universal-2")],
+    "AssemblyAI": [
+        ("Universal-3.5 Pro", "universal-3-5-pro"),
+        ("Universal-3 Pro", "universal-3-pro"),
+        ("Universal-2", "universal-2"),
+    ],
     "gpt-4o-transcribe": [("gpt-4o-transcribe", "gpt-4o-transcribe"), ("gpt-4o-mini-transcribe", "gpt-4o-mini-transcribe"), ("whisper-1", "whisper-1")],
     "Gemini": [("gemini-2.5-flash", "gemini-2.5-flash"), ("gemini-2.5-pro", "gemini-2.5-pro")],
     "OpenRouter": [("Gemini 2.5 Flash", "google/gemini-2.5-flash"), ("Gemini 2.5 Pro", "google/gemini-2.5-pro"), ("GPT-4o Audio", "openai/gpt-4o-audio-preview")],
-    "Soniox": [("soniox/stt-async", "soniox_async")],
+    "Soniox": [("stt-async-v5", "stt-async-v5"), ("stt-async-v4", "stt-async-v4")],
     "JustPostProcess": [("Arquivo TXT local", "local_txt")],
     "JustGenerateDocx": [("Arquivo TXT local", "local_txt")],
 }
@@ -51,6 +55,98 @@ POST_PROCESSING_MODELS = {
     "OpenRouter": [("OpenAI GPT-4o mini", "openai/gpt-4o-mini"), ("Claude Sonnet Latest", "~anthropic/claude-sonnet-latest"), ("Gemini Flash Latest", "~google/gemini-flash-latest")],
     "None": [("Nenhum", "none")],
 }
+
+SONIOX_DEFAULT_ASYNC_MODEL = "stt-async-v5"
+SONIOX_LEGACY_MODEL_IDS = {"soniox_async", "soniox/stt-async"}
+ASSEMBLYAI_DEFAULT_MODEL = "universal-3-5-pro"
+ASSEMBLYAI_STREAMING_ONLY_MODEL_IDS = {"universal-3-6-pro"}
+ASSEMBLYAI_EXCLUDED_MODEL_IDS = {
+    "best",
+    "nano",
+    "slam-1",
+    "universal",
+    "universal-streaming-english",
+    "universal-streaming-multilingual",
+    *ASSEMBLYAI_STREAMING_ONLY_MODEL_IDS,
+}
+ASSEMBLYAI_MODEL_ID_RE = re.compile(r"\b(universal-\d+(?:-\d+)?(?:-pro)?)\b", re.IGNORECASE)
+ASSEMBLYAI_MODEL_DOC_URLS = (
+    "https://www.assemblyai.com/docs/pre-recorded-audio/select-the-speech-model.md",
+)
+ASSEMBLYAI_API_MODEL_URLS = (
+    "https://api.assemblyai.com/v2/models",
+    "https://api.assemblyai.com/v3/models",
+)
+
+
+def _soniox_async_sort_key(model_id, is_alias=False):
+    """Ordena modelos async do Soniox: estáveis primeiro, versão mais alta primeiro, aliases por último."""
+    model_id = (model_id or "").lower()
+    is_preview = "preview" in model_id
+    match = re.search(r"v(\d+)$", model_id)
+    version = int(match.group(1)) if match else 0
+    return (is_preview, -version, bool(is_alias), model_id)
+
+
+def resolve_soniox_async_model(transcription_model, default=SONIOX_DEFAULT_ASYNC_MODEL):
+    """Converte placeholder antigo ou valor vazio no modelo async padrão do Soniox."""
+    model = (transcription_model or "").strip()
+    if not model or model in SONIOX_LEGACY_MODEL_IDS:
+        return default
+    return model
+
+
+def _assemblyai_model_label(model_id):
+    """Converte IDs como universal-3-6-pro em rótulos legíveis."""
+    model_id = (model_id or "").strip()
+    match = re.fullmatch(r"universal-(\d+)(?:-(\d+))?(?:-(pro))?", model_id, re.IGNORECASE)
+    if not match:
+        return model_id
+    major, minor, tier = match.groups()
+    label = f"Universal-{major}"
+    if minor:
+        label += f".{minor}"
+    if tier:
+        label += f" {tier.title()}"
+    return label
+
+
+def _assemblyai_model_sort_key(model_id):
+    """Ordena modelos AssemblyAI: versão mais alta primeiro, Pro antes do restante."""
+    model_id = (model_id or "").lower()
+    match = re.fullmatch(r"universal-(\d+)(?:-(\d+))?(?:-(pro))?", model_id)
+    if not match:
+        return (1, 0, 0, 0, model_id)
+    major = int(match.group(1))
+    minor = int(match.group(2) or 0)
+    is_pro = 1 if match.group(3) else 0
+    return (0, -major, -minor, -is_pro, model_id)
+
+
+def normalize_assemblyai_models(model_ids):
+    """Deduplica e ordena IDs de speech models async da AssemblyAI para o combo."""
+    seen = {}
+    for model_id in model_ids:
+        model_id = (model_id or "").strip().lower()
+        if not model_id or "streaming" in model_id:
+            continue
+        if model_id in ASSEMBLYAI_EXCLUDED_MODEL_IDS:
+            continue
+        if not model_id.startswith("universal-"):
+            continue
+        seen[model_id] = _assemblyai_model_label(model_id)
+    return [
+        (label, model_id)
+        for model_id, label in sorted(seen.items(), key=lambda item: _assemblyai_model_sort_key(item[0]))
+    ]
+
+
+def resolve_assemblyai_async_model(transcription_model, default=ASSEMBLYAI_DEFAULT_MODEL):
+    """Evita IDs de streaming (ex.: universal-3-6-pro) na API de áudio gravado."""
+    model = (transcription_model or "").strip().lower()
+    if not model or model in ASSEMBLYAI_EXCLUDED_MODEL_IDS:
+        return default
+    return model
 
 # --- Configuração Inicial Gemini ---
 # Configuração para google-genai - usa apenas a chave API fornecida pelo usuário na interface
@@ -1985,6 +2081,12 @@ class TranscriptionWindow(QMainWindow):
             if (self.service_openrouter.isChecked() or self.use_openrouter_radio.isChecked())
             else None
         )
+        self.api_key_soniox_input.editingFinished.connect(
+            lambda: self._refresh_model_combos(fetch_remote=True, target='transcription') if self.service_soniox.isChecked() else None
+        )
+        self.api_key_assembly_input.editingFinished.connect(
+            lambda: self._refresh_model_combos(fetch_remote=True, target='transcription') if self.service_assembly.isChecked() else None
+        )
 
         self.update_ui_visibility() # Inicializar visibilidade
         # Carregar configurações salvas (última sessão)
@@ -2048,6 +2150,34 @@ class TranscriptionWindow(QMainWindow):
         combo.setCurrentIndex(index)
         combo.blockSignals(False)
 
+    def _preferred_latest_combo_value(self, models, legacy_ids=None, default=None):
+        """Mantém a escolha válida do usuário; senão, usa o modelo mais recente (primeiro da lista)."""
+        if legacy_ids is None:
+            legacy_ids = ()
+        current = self.transcription_model_combo.currentData() if hasattr(self, "transcription_model_combo") else None
+        if current and current not in legacy_ids and any(value == current for _label, value in models):
+            return current
+        if models:
+            return models[0][1]
+        return default
+
+    def _preferred_soniox_combo_value(self, models):
+        return self._preferred_latest_combo_value(
+            models, SONIOX_LEGACY_MODEL_IDS, SONIOX_DEFAULT_ASYNC_MODEL
+        )
+
+    def _preferred_assemblyai_combo_value(self, models):
+        return self._preferred_latest_combo_value(
+            models, ASSEMBLYAI_STREAMING_ONLY_MODEL_IDS, ASSEMBLYAI_DEFAULT_MODEL
+        )
+
+    def _preferred_transcription_combo_value(self, provider, models):
+        if provider == "Soniox":
+            return self._preferred_soniox_combo_value(models)
+        if provider == "AssemblyAI":
+            return self._preferred_assemblyai_combo_value(models)
+        return None
+
     def _get_provider_key(self, provider, purpose):
         if provider == "gpt-4o-transcribe":
             return self.api_key_openai_transcription_input.text().strip() if purpose == 'transcription' else self.api_key_openai_post_input.text().strip()
@@ -2094,6 +2224,93 @@ class TranscriptionWindow(QMainWindow):
         response.raise_for_status()
         ids = sorted(item.get('id', '') for item in response.json().get('data', []) if item.get('id'))
         return [(m, m) for m in ids]
+
+    def _fetch_soniox_models(self, api_key):
+        response = requests.get(
+            "https://api.soniox.com/v1/models",
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=15,
+        )
+        response.raise_for_status()
+        parsed = []
+        for item in response.json().get("models") or []:
+            model_id = (item.get("id") or "").strip()
+            if not model_id:
+                continue
+            mode = str(item.get("transcription_mode") or "").lower()
+            if model_id.startswith("stt-rt-") or model_id.startswith("tts"):
+                continue
+            is_async = model_id.startswith("stt-async-") or mode in ("async", "asynchronous")
+            if not is_async:
+                continue
+            name = (item.get("name") or model_id).strip()
+            aliased = (item.get("aliased_model_id") or "").strip() or None
+            if aliased:
+                label = f"{name} ({model_id} → {aliased})"
+            elif name != model_id:
+                label = f"{name} ({model_id})"
+            else:
+                label = model_id
+            parsed.append((label, model_id, aliased))
+        parsed.sort(key=lambda item: _soniox_async_sort_key(item[1], bool(item[2])))
+        return [(label, model_id) for label, model_id, _aliased in parsed]
+
+    def _resolve_soniox_async_model(self, transcription_model):
+        return resolve_soniox_async_model(transcription_model)
+
+    def _parse_assemblyai_models_payload(self, payload):
+        raw_items = []
+        if isinstance(payload, dict):
+            raw_items = payload.get("models") or payload.get("data") or payload.get("speech_models") or []
+        elif isinstance(payload, list):
+            raw_items = payload
+        ids = []
+        for item in raw_items:
+            if isinstance(item, str):
+                ids.append(item)
+            elif isinstance(item, dict):
+                ids.append(item.get("id") or item.get("name") or item.get("model") or "")
+        return ids
+
+    def _fetch_assemblyai_models_from_docs(self):
+        ids = []
+        last_error = None
+        headers = {"User-Agent": "Kiwiscribe/1.0 (model-catalog)"}
+        for url in ASSEMBLYAI_MODEL_DOC_URLS:
+            try:
+                response = requests.get(url, headers=headers, timeout=15)
+                response.raise_for_status()
+                ids.extend(ASSEMBLYAI_MODEL_ID_RE.findall(response.text))
+            except Exception as e:
+                last_error = e
+        if not ids and last_error:
+            raise last_error
+        return ids
+
+    def _fetch_assemblyai_models(self, api_key):
+        discovered = []
+        if api_key:
+            for url in ASSEMBLYAI_API_MODEL_URLS:
+                try:
+                    response = requests.get(
+                        url,
+                        headers={"authorization": api_key},
+                        timeout=15,
+                    )
+                    if response.status_code == 404:
+                        continue
+                    response.raise_for_status()
+                    discovered.extend(self._parse_assemblyai_models_payload(response.json()))
+                    if discovered:
+                        break
+                except Exception:
+                    continue
+        discovered.extend(self._fetch_assemblyai_models_from_docs())
+        discovered.extend(value for _label, value in TRANSCRIPTION_MODELS["AssemblyAI"])
+        models = normalize_assemblyai_models(discovered)
+        if not models:
+            raise RuntimeError("Nenhum modelo AssemblyAI encontrado na documentação oficial.")
+        return models
 
     def _fetch_google_models(self, api_key, purpose):
         response = requests.get(
@@ -2209,10 +2426,10 @@ class TranscriptionWindow(QMainWindow):
             return fallback
         if api_key is None:
             api_key = self._get_provider_key(provider, purpose)
-        if provider in ("AssemblyAI", "Soniox", "JustPostProcess", "JustGenerateDocx", "None"):
+        if provider in ("JustPostProcess", "JustGenerateDocx", "None"):
             notify(f"ℹ️ {provider}: usando lista local de modelos/serviços disponíveis.")
             return fallback
-        if not api_key:
+        if not api_key and provider != "AssemblyAI":
             notify(f"⚠️ Informe a API Key de {provider} para atualizar modelos em tempo real. Usando lista local.")
             return fallback
         try:
@@ -2224,6 +2441,10 @@ class TranscriptionWindow(QMainWindow):
                 models = self._fetch_google_models(api_key, purpose)
             elif provider == "OpenRouter":
                 models = self._fetch_openrouter_models(api_key, purpose, notify=notify)
+            elif provider == "Soniox":
+                models = self._fetch_soniox_models(api_key)
+            elif provider == "AssemblyAI":
+                models = self._fetch_assemblyai_models(api_key)
             else:
                 models = fallback
             if not models:
@@ -2258,7 +2479,8 @@ class TranscriptionWindow(QMainWindow):
     def _apply_remote_models(self, purpose, provider, models):
         if purpose == 'transcription':
             if provider == self._current_transcription_service():
-                self._populate_combo(self.transcription_model_combo, models)
+                preferred = self._preferred_transcription_combo_value(provider, models)
+                self._populate_combo(self.transcription_model_combo, models, preferred_value=preferred)
         elif provider == self._current_post_provider():
             self._populate_combo(self.post_model_combo, models)
 
@@ -2266,10 +2488,9 @@ class TranscriptionWindow(QMainWindow):
         transcription_provider = self._current_transcription_service()
         post_provider = self._current_post_provider()
         if target in (None, 'transcription'):
-            self._populate_combo(
-                self.transcription_model_combo,
-                self._get_models_for_provider(transcription_provider, 'transcription', fetch_remote=fetch_remote),
-            )
+            models = self._get_models_for_provider(transcription_provider, 'transcription', fetch_remote=fetch_remote)
+            preferred = self._preferred_transcription_combo_value(transcription_provider, models)
+            self._populate_combo(self.transcription_model_combo, models, preferred_value=preferred)
         if target in (None, 'post'):
             self._populate_combo(
                 self.post_model_combo,
@@ -3069,9 +3290,10 @@ Por favor, forneça uma transcrição completa e detalhada. Responda APENAS com 
 
 
 
-    def transcribe_with_soniox(self, file_path_or_url, destination_path, worker_signals, api_key_soniox):
+    def transcribe_with_soniox(self, file_path_or_url, destination_path, worker_signals, api_key_soniox, transcription_model=None):
         """Realiza a transcricao de audio usando o SDK oficial do Soniox (corrige problema de espacamento em tokens pt-BR)."""
         try:
+            soniox_model = self._resolve_soniox_async_model(transcription_model)
             # 1. Importar SDK oficial do Soniox (instalado via pip install soniox)
             SonioxClient = None
             CreateTranscriptionConfig = None
@@ -3092,14 +3314,14 @@ Por favor, forneça uma transcrição completa e detalhada. Responda APENAS com 
 
             # 2. ABORDAGEM PREFERIDA: SDK oficial (evita problema de espaçamento)
             if use_sdk and SonioxClient is not None and CreateTranscriptionConfig is not None:
-                worker_signals.message.emit("🧠 Iniciando transcrição com SDK Soniox...")
+                worker_signals.message.emit(f"🧠 Iniciando transcrição com SDK Soniox ({soniox_model})...")
                 
                 # Criar cliente do SDK
                 client = SonioxClient(api_key=api_key_soniox)
                 
                 # Configurar parâmetros otimizados para Português
                 config = CreateTranscriptionConfig(
-                    model="stt-async-v4",
+                    model=soniox_model,
                     enable_speaker_diarization=True,
                     enable_language_identification=False,
                     language_hints=["pt"],  # Código oficial conforme documentação Soniox
@@ -3223,7 +3445,7 @@ Por favor, forneça uma transcrição completa e detalhada. Responda APENAS com 
             else:
                 worker_signals.message.emit("⚠️ Usando implementação REST manual do Soniox (pode ter problemas de espaçamento em pt-BR).")
                 segments = self._transcribe_with_soniox_rest_fallback(
-                    file_path_or_url, api_key_soniox, is_url, worker_signals
+                    file_path_or_url, api_key_soniox, is_url, worker_signals, soniox_model
                 )
                 if segments is None:
                     return False
@@ -3248,7 +3470,7 @@ Por favor, forneça uma transcrição completa e detalhada. Responda APENAS com 
             print(f"Traceback Soniox Error:\n{traceback.format_exc()}")
             return False
 
-    def _transcribe_with_soniox_rest_fallback(self, file_path_or_url, api_key_soniox, is_url, worker_signals):
+    def _transcribe_with_soniox_rest_fallback(self, file_path_or_url, api_key_soniox, is_url, worker_signals, transcription_model=None):
         """Fallback REST manual caso SDK não esteja disponível (manter compatibilidade)."""
         base_url = "https://api.soniox.com/v1"
         headers = {"Authorization": f"Bearer {api_key_soniox}"}
@@ -3294,8 +3516,9 @@ Por favor, forneça uma transcrição completa e detalhada. Responda APENAS com 
                 worker_signals.message.emit(f"✅ Upload Soniox concluido. File ID: {file_id}")
             
             # Criar transcrição
+            soniox_model = self._resolve_soniox_async_model(transcription_model)
             payload = {
-                "model": "stt-async-v4",
+                "model": soniox_model,
                 "enable_speaker_diarization": True,
                 "enable_language_identification": True  # Auto-detecta idioma (REST API rejeita language_hints)
                 # language_hints removido - REST API tem validação diferente do SDK
@@ -3308,7 +3531,7 @@ Por favor, forneça uma transcrição completa e detalhada. Responda APENAS com 
                     return None
                 payload["file_id"] = file_id
             
-            worker_signals.message.emit("🧠 Criando transcricao async no Soniox (REST)...")
+            worker_signals.message.emit(f"🧠 Criando transcricao async no Soniox (REST, {soniox_model})...")
             response = request_with_retry(
                 "POST",
                 f"{base_url}/transcriptions",
@@ -3546,8 +3769,18 @@ Por favor, forneça uma transcrição completa e detalhada. Responda APENAS com 
                         )
                         raise ValueError("API Key da AssemblyAI ausente.")
                     aai.settings.api_key = effective_assembly_key
+                    resolved_assembly_model = resolve_assemblyai_async_model(transcription_model)
+                    if resolved_assembly_model != (transcription_model or "").strip():
+                        self.worker_signals.message.emit(
+                            f"⚠️ {transcription_model or '(vazio)'} não é válido para áudio gravado na AssemblyAI. "
+                            f"Usando {resolved_assembly_model}."
+                        )
+                        transcription_model = resolved_assembly_model
 
-                    self.worker_signals.message.emit(f"🗣️ Configurando AssemblyAI (Interlocutores: {'Automático' if num_interlocutors == 0 else num_interlocutors})...")
+                    self.worker_signals.message.emit(
+                        f"🗣️ Configurando AssemblyAI ({transcription_model}; "
+                        f"Interlocutores: {'Automático' if num_interlocutors == 0 else num_interlocutors})..."
+                    )
                     boost_terms = ["juiz", "juíza", "excelência", "reclamante", "reclamada", "preposto", "preposta", "advogado", "advogada", "testemunha", "depoimento", "contradita", "indeferido", "deferido", "pela ordem", "questão de ordem", "autos", "sentença", "acórdão", "liminar", "tutela", "mérito", "ônus da prova", "cartão de ponto", "horas extras", "intervalo", "verbas rescisórias"]
                     config_params = {
                         "speech_models": [transcription_model],
@@ -3724,7 +3957,8 @@ Por favor, forneça uma transcrição completa e detalhada. Responda APENAS com 
                      file_path_or_url,
                      full_destination_path,
                      self.worker_signals,
-                     api_key_soniox
+                     api_key_soniox,
+                     transcription_model,
                  )
 
 
