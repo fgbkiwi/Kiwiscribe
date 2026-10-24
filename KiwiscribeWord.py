@@ -470,49 +470,119 @@ def clean_intro_lines(section_lines):
             
     return cleaned_intro + section_lines[first_speech_idx:]
 
+def _is_judge_role(role_lower):
+    return re.search(r'ju[ií]z', role_lower) is not None
+
+def _is_lawyer_role(role_lower):
+    return 'advogad' in role_lower
+
+def _is_witness_role(role_lower):
+    return 'testemunha' in role_lower
+
+# Aceite curto do compromisso ("ciente", "sim, senhor", "ficou claro, sim").
+# Não casa resposta de mérito: há dígito, ou o texto passa de um cumprimento.
+_OATH_ACK_RE = re.compile(
+    r'(?:sim|não|nao|ciente|ok|okay|certo|entendido|entendi|uhum|claro|'
+    r'tudo bem|t[aá] bem|est[aá] bem|est[aá] certo|ficou claro|'
+    r'fico ciente|estou ciente|pode ser|correto|t[aá] ok(?:ay)?)'
+    r'(?:[\s,]+(?:sim|senhor|senhora|excel[eê]ncia|doutor(?:a)?|ok|okay))*',
+    re.IGNORECASE,
+)
+
+_ADMONITION_HINTS = (
+    'verdade', 'falso testemunho', 'mentir', 'esconder', 'presenci',
+    'multad', 'preso', 'crime de falso', 'compromiss', 'obrigad',
+    'ficou claro', 'tá certo', 'ta certo', 'tá ok', 'ta ok',
+    'só pode falar', 'so pode falar', 'apenas o que',
+    'não é o que', 'nao e o que', 'alguém disse', 'alguem disse',
+)
+
+def _is_oath_acknowledgement(text):
+    """Resposta curta ao compromisso, sem conteúdo de depoimento."""
+    normalized = re.sub(r'\s+', ' ', text.strip().lower()).strip(' .,!?;:')
+    if not normalized or len(normalized) > 60 or re.search(r'\d', normalized):
+        return False
+    if _OATH_ACK_RE.fullmatch(normalized):
+        return True
+    # Interjeição que só começa o aceite ("tudo bem, deixa eu"), sem mérito.
+    return re.fullmatch(
+        r'(?:tudo bem|t[aá] bem|est[aá] bem|est[aá] certo|ok|okay|certo)(?:\s*,\s*deixa eu)?',
+        normalized,
+    ) is not None
+
+def _is_admonition_line(role_lower, text_lower):
+    """Fala do juiz que ainda é a advertência, não pergunta de mérito."""
+    if not _is_judge_role(role_lower):
+        return False
+    return any(hint in text_lower for hint in _ADMONITION_HINTS)
+
 def replace_witness_qualification(witness_lines):
+    """Substitui qualificação e advertência por um marcador.
+
+    O bloco removido termina na advertência (e no aceite curto da testemunha).
+    Pergunta de advogado — ainda que seja a primeira, feita antes de a
+    testemunha dizer "ciente" — fica de fora e permanece no depoimento.
+    """
     warning_keywords = ["falso testemunho", "falar a verdade", "responder a verdade", "compromisso", "crime de falso"]
     personal_keywords = ["cpf", "endereço", "endereco", "carteira", "identidade", "rg", "nome completo", "estado civil"]
-    
+
     warning_start_idx = None
-    warning_end_idx = None
-    
     for idx, line in enumerate(witness_lines):
         text_lower = line['text'].lower()
         role_lower = line['role'].lower()
-        
-        if 'juiz' in role_lower and any(kw in text_lower for kw in warning_keywords):
-            if warning_start_idx is None:
-                warning_start_idx = idx
-                
-        if warning_start_idx is not None and idx > warning_start_idx:
-            if 'testemunha' in role_lower:
-                warning_end_idx = idx
-                break
-                
-    if warning_start_idx is None or warning_end_idx is None:
+        if _is_judge_role(role_lower) and any(kw in text_lower for kw in warning_keywords):
+            warning_start_idx = idx
+            break
+
+    if warning_start_idx is None:
         return witness_lines
-        
+
+    # A advertência pode vir em mais de uma fala, com "sim"/"ciente" no meio.
+    # Para na primeira pergunta do advogado ou em resposta que já é depoimento:
+    # antes, a fala seguinte da testemunha era tratada como fim do compromisso,
+    # e a pergunta (e a resposta) que coubessem nesse intervalo eram apagadas.
+    warning_end_idx = warning_start_idx
+    idx = warning_start_idx + 1
+    while idx < len(witness_lines):
+        line = witness_lines[idx]
+        role_lower = line['role'].lower()
+        text_lower = line['text'].lower()
+        if _is_lawyer_role(role_lower):
+            break
+        if _is_witness_role(role_lower) and _is_oath_acknowledgement(line['text']):
+            warning_end_idx = idx
+            idx += 1
+            continue
+        if _is_admonition_line(role_lower, text_lower):
+            warning_end_idx = idx
+            idx += 1
+            continue
+        break
+
     qualification_start_idx = warning_start_idx
     for idx in range(warning_start_idx - 1, -1, -1):
         line = witness_lines[idx]
         text_lower = line['text'].lower()
         role_lower = line['role'].lower()
-        
+
+        # Pergunta anterior ao compromisso não entra na qualificação.
+        if _is_lawyer_role(role_lower):
+            break
+
         if any(kw in text_lower for kw in personal_keywords):
             qualification_start_idx = idx
         elif idx < qualification_start_idx - 2:
             break
-            
+
     qual_timestamp = witness_lines[qualification_start_idx]['time']
     qual_placeholder = {
         'time': qual_timestamp,
         'role': 'Nota',
         'name': '',
-        'text': f"({witness_lines[warning_end_idx]['role'].lower()} qualificada, advertida e compromissada)",
+        'text': '(testemunha qualificada, advertida e compromissada)',
         'raw_format': f"[{qual_timestamp}] (testemunha qualificada, advertida e compromissada)"
     }
-    
+
     new_lines = witness_lines[:qualification_start_idx] + [qual_placeholder] + witness_lines[warning_end_idx + 1:]
     return new_lines
 

@@ -1473,12 +1473,16 @@ def process_transcript_with_gemini(transcript_path, ata_info, api_key_gemini, ou
 # (Mantido como na versão anterior)
 class FileTableDialog(QDialog):
     """Diálogo para selecionar arquivos de uma lista (áudio ou ata)."""
-    def __init__(self, files, file_type, parent=None):
+    def __init__(self, files, file_type, parent=None, start_dir=None, extensions=None):
         super().__init__(parent)
         self.setWindowTitle(f"Selecionar Arquivo {'de Áudio' if file_type == 'audio' else 'da Ata'}")
         self.setMinimumSize(700, 450)
         self.selected_file: str | None = None
-        self.current_dir: str = get_download_dir()  # Diretório inicial
+        if start_dir and os.path.isdir(start_dir):
+            self.current_dir = os.path.normpath(start_dir)
+        else:
+            self.current_dir = get_download_dir()
+        self.extensions = tuple(ext.lower() for ext in (extensions or ()))
 
         layout = QVBoxLayoutDialog(self)
 
@@ -1559,9 +1563,11 @@ class FileTableDialog(QDialog):
             QFileDialog.Option.ShowDirsOnly
         )
         if new_dir:
-            self.current_dir = new_dir
+            self.current_dir = os.path.normpath(new_dir)
             try:
                 files = [f for f in os.listdir(new_dir) if os.path.isfile(os.path.join(new_dir, f))]
+                if self.extensions:
+                    files = [f for f in files if f.lower().endswith(self.extensions)]
                 self.update_file_list(files)
             except Exception as e:
                 QMessageBox.warning(self, "Erro", f"Erro ao listar arquivos: {str(e)}")
@@ -1665,6 +1671,7 @@ class TranscriptionWindow(QMainWindow):
         elif os.path.exists(self.logo_image_path):
             self.setWindowIcon(QIcon(self.logo_image_path))
         self.saved_keys = load_api_keys()
+        self.last_audio_dir = ""
         self.worker_signals = WorkerSignals()
         self.worker_signals.message.connect(self.update_message_box)
         self.worker_signals.finished.connect(self.on_transcription_finished)
@@ -2580,7 +2587,8 @@ class TranscriptionWindow(QMainWindow):
             'generate_docx': self.generate_docx_checkbox.isChecked(),
             
             'num_interlocutors': self.num_input.text(),
-            'speaker_identification': self.speaker_identification_cb.isChecked()
+            'speaker_identification': self.speaker_identification_cb.isChecked(),
+            'last_audio_dir': self.last_audio_dir
         }
         try:
             settings_path = os.path.join(os.path.expanduser('~'), '.kiwiscribe_settings.json')
@@ -2631,6 +2639,9 @@ class TranscriptionWindow(QMainWindow):
                     self.post_model_combo.setCurrentIndex(index)
 
             self.generate_docx_checkbox.setChecked(settings.get('generate_docx', False))
+
+            last_audio_dir = settings.get('last_audio_dir') or ""
+            self.last_audio_dir = os.path.normpath(last_audio_dir) if last_audio_dir else ""
 
             # Atualiza visibilidade após restaurar
             self.update_ui_visibility()
@@ -2729,6 +2740,32 @@ class TranscriptionWindow(QMainWindow):
         finally:
             self.setUpdatesEnabled(True)
 
+    def _audio_picker_start_dir(self, current_path=""):
+        """Diretório inicial do seletor de áudio: última pasta escolhida, senão a do arquivo atual, senão Downloads."""
+        candidates = []
+        if self.last_audio_dir:
+            candidates.append(self.last_audio_dir)
+        if current_path:
+            parent = os.path.dirname(current_path.strip().strip('"').strip("'"))
+            if parent:
+                candidates.append(parent)
+        candidates.append(get_download_dir())
+        candidates.append(os.path.expanduser("~"))
+        for candidate in candidates:
+            if candidate and os.path.isdir(candidate):
+                return os.path.normpath(candidate)
+        return os.path.expanduser("~")
+
+    def _remember_audio_dir(self, directory):
+        """Guarda a última pasta usada no seletor de áudio para a próxima abertura."""
+        if not directory or not os.path.isdir(directory):
+            return
+        normalized = os.path.normpath(directory)
+        if self.last_audio_dir and os.path.normpath(self.last_audio_dir) == normalized:
+            return
+        self.last_audio_dir = normalized
+        self.save_settings()
+
     # --- Funções browse_file_dialog, browse_file_fallback ---
     # (Mantidas como na versão anterior)
     def browse_file_dialog(self, file_type):
@@ -2742,18 +2779,22 @@ class TranscriptionWindow(QMainWindow):
             input_field = self.ata_input
 
         current_path = input_field.text()
-        if not current_path or not os.path.isdir(os.path.dirname(current_path)):
+        if file_type == 'audio':
+            start_dir = self._audio_picker_start_dir(current_path)
+        elif not current_path or not os.path.isdir(os.path.dirname(current_path)):
              start_dir = download_dir
         else:
              start_dir = os.path.dirname(current_path) # Começa no dir do arquivo atual
 
+        list_dir = start_dir if file_type == 'audio' else download_dir
+
         try:
-            all_files = [f for f in os.listdir(download_dir) if os.path.isfile(os.path.join(download_dir, f))]
+            all_files = [f for f in os.listdir(list_dir) if os.path.isfile(os.path.join(list_dir, f))]
         except FileNotFoundError:
-            self.update_message_box(f"Erro: Diretório de downloads '{download_dir}' não encontrado.")
+            self.update_message_box(f"Erro: Diretório '{list_dir}' não encontrado.")
             all_files = []
         except Exception as e:
-             self.update_message_box(f"Erro ao listar arquivos em '{download_dir}': {e}")
+             self.update_message_box(f"Erro ao listar arquivos em '{list_dir}': {e}")
              all_files = []
 
 
@@ -2762,30 +2803,39 @@ class TranscriptionWindow(QMainWindow):
             audio_extensions = ('.mp3', '.wav', '.m4a', '.ogg', '.flac', '.aac', '.opus', '.amr', '.wma')
             relevant_files = [f for f in all_files if f.lower().endswith(audio_extensions)]
             title_suffix = "de Áudio"
+            extensions = audio_extensions
         elif file_type == 'transcription':
             # Filtra por extensões de texto
             txt_extensions = ('.txt',)
             relevant_files = [f for f in all_files if f.lower().endswith(txt_extensions)]
             title_suffix = "de Transcrição"
+            extensions = txt_extensions
         elif file_type == 'ata':
             # Filtra por extensões de ata
             ata_extensions = ('.pdf', '.txt')
             relevant_files = [f for f in all_files if f.lower().endswith(ata_extensions)]
             title_suffix = "da Ata"
+            extensions = ata_extensions
         else:
             return
 
         if not relevant_files:
-            self.update_message_box(f"Nenhum arquivo {title_suffix.lower()} encontrado no diretório de downloads padrão ({download_dir}). Usando diálogo padrão.")
+            if file_type == 'audio':
+                self.update_message_box(f"Nenhum arquivo de áudio encontrado em '{list_dir}'. Usando diálogo padrão.")
+            else:
+                self.update_message_box(f"Nenhum arquivo {title_suffix.lower()} encontrado no diretório de downloads padrão ({download_dir}). Usando diálogo padrão.")
             # Tenta o QFileDialog padrão como fallback
-            self.browse_file_fallback(file_type)
+            self.browse_file_fallback(file_type, start_dir if file_type == 'audio' else None)
             return
 
-        dialog = FileTableDialog(relevant_files, file_type, self)
-        if dialog.exec(): # Mostra o diálogo e espera (bloqueia)
+        dialog = FileTableDialog(relevant_files, file_type, self, start_dir=list_dir, extensions=extensions)
+        accepted = dialog.exec() # Mostra o diálogo e espera (bloqueia)
+        if file_type == 'audio':
+            self._remember_audio_dir(dialog.current_dir)
+        if accepted:
             selected_file = dialog.get_selected_file()
             if selected_file:
-                full_path = os.path.join(download_dir, selected_file)
+                full_path = selected_file if os.path.isabs(selected_file) else os.path.join(list_dir, selected_file)
                 input_field.setText(full_path)
                 self.update_message_box(f"Arquivo {title_suffix.lower()} selecionado: {full_path}")
         else:
@@ -2793,7 +2843,7 @@ class TranscriptionWindow(QMainWindow):
             self.update_message_box(f"Seleção de arquivo {title_suffix.lower()} cancelada.")
 
 
-    def browse_file_fallback(self, file_type):
+    def browse_file_fallback(self, file_type, start_dir=None):
         """Fallback para o QFileDialog padrão se o diálogo personalizado falhar."""
         self.update_message_box("Usando diálogo de arquivo padrão...")
         title = "Selecionar Arquivo"
@@ -2810,12 +2860,17 @@ class TranscriptionWindow(QMainWindow):
              title = "Selecionar Arquivo da Ata"
              input_field = self.ata_input
         
-        start_dir = get_download_dir()
+        if file_type == 'audio':
+            start_dir = start_dir or self._audio_picker_start_dir(input_field.text())
+        else:
+            start_dir = get_download_dir()
 
         file_path, _ = QFileDialog.getOpenFileName(self, title, start_dir, filters)
 
         if file_path:
             input_field.setText(file_path)
+            if file_type == 'audio':
+                self._remember_audio_dir(os.path.dirname(file_path))
             self.update_message_box(f"Arquivo selecionado (fallback): {file_path}")
 
     def start_transcription(self):
