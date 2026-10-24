@@ -32,7 +32,7 @@ except Exception:
     generate_word_document = None
     DOCX_GENERATOR_AVAILABLE = False
 
-APP_VERSION = "1.0.11"
+APP_VERSION = "1.0.12"
 
 TRANSCRIPTION_MODELS = {
     "AssemblyAI": [
