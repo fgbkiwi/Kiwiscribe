@@ -5,6 +5,8 @@
 - Linux: adicionado `build_kiwiscribe_deb.sh` e `packaging/linux/` para gerar instalador
   `.deb` (Pop!_OS / Ubuntu), no mesmo papel do `build_installer.bat` no Windows — CPython
   3.13 embutido via `uv`, atalho no menu e publicação opcional na Release GitHub.
+- Linux: `build_kiwiscribe_deb.sh` passa a instalar o `.deb` localmente ao final do build
+  (use `--no-install` para pular) e atualiza o App Library do COSMIC/Pop!_OS.
 - Atualizações: verificação automática de versão mais nova no startup (no máximo 1x/dia)
   via GitHub Releases (`kiwiscribe_updates.py`); no Linux instala o `.deb` com
   `pkexec`+`apt`, no Windows abre o instalador `.exe`.

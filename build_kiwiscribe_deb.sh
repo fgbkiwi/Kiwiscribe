@@ -20,13 +20,12 @@
 #   GitHub CLI (gh) autenticado — so necessario se for publicar
 #
 # Uso:
-#   ./build_kiwiscribe_deb.sh                  # patch + publica Release
-#   ./build_kiwiscribe_deb.sh minor            # minor + publica Release
-#   ./build_kiwiscribe_deb.sh major            # major + publica Release
-#   ./build_kiwiscribe_deb.sh --no-publish     # so gera o .deb
-#   ./build_kiwiscribe_deb.sh minor --no-publish
+#   ./build_kiwiscribe_deb.sh                  # patch + publica + instala local
+#   ./build_kiwiscribe_deb.sh minor            # minor + publica + instala local
+#   ./build_kiwiscribe_deb.sh major            # major + publica + instala local
+#   ./build_kiwiscribe_deb.sh --no-publish     # so gera o .deb (+ instala local)
 #   ./build_kiwiscribe_deb.sh --no-bump        # empacota a versao atual
-#                                              # (util depois do build Windows)
+#   ./build_kiwiscribe_deb.sh --no-install     # nao instala o .deb nesta maquina
 # ============================================================
 
 set -euo pipefail
@@ -81,23 +80,26 @@ die() {
 
 usage() {
     cat <<EOF
-Uso: $0 [patch|minor|major] [--no-publish] [--no-bump]
+Uso: $0 [patch|minor|major] [--no-publish] [--no-bump] [--no-install]
 
   patch|minor|major   componente do bump (padrao: patch)
   --no-publish        so gera o .deb, sem Release no GitHub
   --no-bump           usa APP_VERSION atual, sem alterar os fontes
+  --no-install        nao instala o .deb nesta maquina apos o build
 EOF
 }
 
 BUMP="patch"
 PUBLISH=1
 DO_BUMP=1
+DO_INSTALL=1
 
 for arg in "$@"; do
     case "$arg" in
         patch|minor|major) BUMP="$arg" ;;
         --no-publish|-NoPublish) PUBLISH=0 ;;
         --no-bump|-NoBump) DO_BUMP=0 ;;
+        --no-install|-NoInstall) DO_INSTALL=0 ;;
         -h|--help) usage; exit 0 ;;
         *)
             echo "Argumento desconhecido: $arg" >&2
@@ -322,7 +324,7 @@ if [ "$PUBLISH" -eq 0 ]; then
     echo "${GRAY}  gh release upload $TAG \"$DEB_OUT\" --repo $GITHUB_REPO --clobber${RESET}"
 else
     echo ""
-    echo "${CYAN}[5/5] Publicando Release $TAG no GitHub...${RESET}"
+    echo "${CYAN}[5/6] Publicando Release $TAG no GitHub...${RESET}"
 
     NOTES=$(cat <<EOF
 Pacote Debian do $APP_NAME $VERSION para Pop!_OS e Ubuntu.
@@ -353,7 +355,85 @@ EOF
     fi
 fi
 
+# --- Instalar localmente (menu do Pop!_OS / Ubuntu) ----------------------
+refresh_desktop_menu() {
+    if command -v update-desktop-database >/dev/null 2>&1; then
+        update-desktop-database -q /usr/share/applications 2>/dev/null || true
+        if [ -d "${XDG_DATA_HOME:-$HOME/.local/share}/applications" ]; then
+            update-desktop-database -q "${XDG_DATA_HOME:-$HOME/.local/share}/applications" 2>/dev/null || true
+        fi
+    fi
+    if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+        gtk-update-icon-cache -f -t /usr/share/icons/hicolor >/dev/null 2>&1 || true
+    fi
+    # COSMIC (Pop!_OS) guarda cache do App Library; reiniciar faz o atalho aparecer.
+    if command -v cosmic-app-library >/dev/null 2>&1; then
+        pkill -x cosmic-app-library 2>/dev/null || true
+    fi
+    if command -v cosmic-launcher >/dev/null 2>&1; then
+        pkill -x cosmic-launcher 2>/dev/null || true
+    fi
+}
+
+install_local_deb() {
+    local deb_path="$1"
+    local apt_bin=""
+    local elev=""
+
+    if command -v apt-get >/dev/null 2>&1; then
+        apt_bin=$(command -v apt-get)
+    elif command -v apt >/dev/null 2>&1; then
+        apt_bin=$(command -v apt)
+    else
+        die "Nem apt-get nem apt encontrados para instalar o pacote."
+    fi
+
+    if [ "$(id -u)" -eq 0 ]; then
+        elev=""
+    elif command -v pkexec >/dev/null 2>&1; then
+        elev="pkexec"
+    elif command -v sudo >/dev/null 2>&1; then
+        elev="sudo"
+    else
+        die "Preciso de pkexec ou sudo para instalar o .deb no sistema."
+    fi
+
+    echo "${GRAY}  Comando: ${elev:+$elev }$apt_bin install -y $deb_path${RESET}"
+    if [ -n "$elev" ]; then
+        "$elev" "$apt_bin" install -y "$deb_path"
+    else
+        "$apt_bin" install -y "$deb_path"
+    fi
+}
+
+if [ "$DO_INSTALL" -eq 0 ]; then
+    echo ""
+    echo "${YELLOW}Instalacao local omitida (--no-install).${RESET}"
+    echo "${GRAY}Para instalar e aparecer no menu:${RESET}"
+    echo "${GRAY}  sudo apt install ./build/deb/$DEB_NAME${RESET}"
+else
+    echo ""
+    echo "${CYAN}[6/6] Instalando $DEB_NAME nesta maquina...${RESET}"
+    install_local_deb "$DEB_OUT"
+
+    if ! dpkg -s "$PKG_NAME" >/dev/null 2>&1; then
+        die "O pacote $PKG_NAME nao ficou instalado apos apt install."
+    fi
+    if [ ! -f "/usr/share/applications/$PKG_NAME.desktop" ]; then
+        die "Atalho /usr/share/applications/$PKG_NAME.desktop nao foi instalado."
+    fi
+    if [ ! -x "/usr/bin/$PKG_NAME" ]; then
+        die "Launcher /usr/bin/$PKG_NAME nao foi instalado."
+    fi
+
+    refresh_desktop_menu
+    echo "${GREEN}Pacote instalado. Atalho:${RESET} /usr/share/applications/$PKG_NAME.desktop"
+    echo "${GRAY}No Pop!_OS (COSMIC), abra de novo o App Library / Super+A e procure por Kiwiscribe.${RESET}"
+fi
+
 echo ""
 echo "${GREEN}Build concluido!${RESET}"
-echo "${GRAY}Instalacao local:${RESET}"
-echo "${GRAY}  sudo apt install ./build/deb/$DEB_NAME${RESET}"
+echo "${GRAY}Pacote: $DEB_OUT${RESET}"
+if [ "$DO_INSTALL" -eq 1 ]; then
+    echo "${GRAY}Launcher: /usr/bin/$PKG_NAME${RESET}"
+fi

@@ -230,10 +230,11 @@ Saída esperada:
 Método recomendado (equivalente Linux do ‘build_installer.bat’):
 
 ```bash
-./build_kiwiscribe_deb.sh --no-bump --no-publish   # gera o .deb da versão atual
-./build_kiwiscribe_deb.sh                          # bump patch + gera .deb + publica Release
-./build_kiwiscribe_deb.sh minor                    # bump minor + publica
-./build_kiwiscribe_deb.sh --no-bump                # empacota a versão atual e publica
+./build_kiwiscribe_deb.sh --no-bump --no-publish   # gera + instala localmente
+./build_kiwiscribe_deb.sh                          # bump patch + gera + publica + instala
+./build_kiwiscribe_deb.sh minor                    # bump minor + publica + instala
+./build_kiwiscribe_deb.sh --no-bump                # empacota a versão atual, publica e instala
+./build_kiwiscribe_deb.sh --no-install             # só gera/publica, sem instalar nesta máquina
 ```
 
 Esse fluxo:
@@ -242,6 +243,7 @@ Esse fluxo:
 - instala as dependências de ‘requirements_installer.txt’ no runtime empacotado;
 - monta o pacote em ‘/opt/kiwiscribe’ com atalho em ‘/usr/bin/kiwiscribe’ e entrada no menu;
 - gera ‘build/deb/Kiwiscribe_<versão>_<arch>.deb’;
+- **instala o ‘.deb’ nesta máquina** (pede senha via ‘pkexec’/‘sudo’) para o atalho aparecer no App Library do Pop!_OS;
 - opcionalmente anexa o ‘.deb’ à Release GitHub ‘v\<versão\>’ (ou cria a Release se ainda não existir).
 
 Pré-requisitos:

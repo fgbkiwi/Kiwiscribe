@@ -58,6 +58,14 @@ if [ "$1" = "configure" ]; then
         gtk-update-icon-cache -f -t /usr/share/icons/hicolor >/dev/null 2>&1 || true
     fi
     retire_user_local_shadows
+
+    # Pop!_OS COSMIC: forçar o App Library a reler /usr/share/applications.
+    if command -v cosmic-app-library >/dev/null 2>&1; then
+        pkill -x cosmic-app-library >/dev/null 2>&1 || true
+    fi
+    if command -v cosmic-launcher >/dev/null 2>&1; then
+        pkill -x cosmic-launcher >/dev/null 2>&1 || true
+    fi
 fi
 
 exit 0
