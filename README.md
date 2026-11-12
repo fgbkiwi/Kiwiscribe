@@ -13,6 +13,8 @@ Também inclui automações para:
 
 - build de executável com PyInstaller;
 - build de instalador Windows com pynsist/NSIS;
+- build de instalador Debian (`.deb`) para Pop!_OS / Ubuntu;
+- verificação automática de novas versões no startup (GitHub Releases);
 - verificação e atualização segura de dependências;
 - teste de conectividade com APIs.
 
@@ -25,25 +27,29 @@ Também inclui automações para:
 - Modo dedicado “Apenas Gerar DOCX (Txt Local)” para criar o documento sem transcrever áudio.
 - Persistência local de chaves em arquivo JSON de configuração do usuário.
 - Extração de metadados de PDF (ata) para enriquecer o fluxo de trabalho.
-- Build distribuível como ‘.exe’ único (PyInstaller) ou instalador ‘.exe’ (pynsist + NSIS).
+- Build distribuível como ‘.exe’ único (PyInstaller), instalador Windows (pynsist + NSIS) ou pacote ‘.deb’ (Pop!_OS / Ubuntu).
+- Verificação automática de atualizações no startup (no máximo 1x por dia).
 
 ## Requisitos
 
 - Python 3.13.x (recomendado 3.13.13).
-- Windows 10/11 para build de instalador.
-- Ambiente virtual local (‘.venv’ no Windows).
+- Windows 10/11 para build do instalador Windows; Linux (Pop!_OS / Ubuntu) para build do ‘.deb’.
+- Ambiente virtual local (‘.venv’ no Windows; ‘.venv’ ou ‘.venv_linux’ no Linux).
 - Internet para chamadas de API e download de dependências.
 
 ## Estrutura de Arquivos Importantes
 
 - ‘Kiwiscribe.py’: aplicação principal.
 - ‘KiwiscribeWord.py’: processamento e geração de ‘.docx’.
+- ‘kiwiscribe_updates.py’: verificação/download/instalação de atualizações via GitHub Releases.
 - ‘requirements_build.txt’: dependências de runtime/build de exe.
 - ‘requirements_installer.txt’: dependências para empacotamento do instalador.
 - ‘dependency_manager.py’: gerenciador de conflitos e atualizações seguras.
 - ‘build_exe.bat’: build do executavel PyInstaller.
 - ‘build_installer.bat’: build do instalador Windows com pynsist.
-- ‘kiwiscribe_installer.cfg’: configuração do instalador.
+- ‘build_kiwiscribe_deb.sh’: build do instalador Debian para Pop!_OS / Ubuntu.
+- ‘packaging/linux/’: launcher, desktop entry e scripts do pacote ‘.deb’.
+- ‘kiwiscribe_installer.cfg’: configuração do instalador Windows.
 - ‘kiwiscribe_launcher.py’: launcher para o instalador.
 - ‘CHANGELOG.md’: histórico de versões.
 
@@ -218,6 +224,48 @@ Saída esperada:
 
 - ‘build\nsis\Kiwiscribe-<versão>-win64.exe’
 - Release em ‘https://github.com/fgbkiwi/Kiwiscribe/releases’ com o instalador anexado (tag ‘v\<versão\>’)
+
+## Build de Instalador Linux (Pop!_OS / Ubuntu)
+
+Método recomendado (equivalente Linux do ‘build_installer.bat’):
+
+```bash
+./build_kiwiscribe_deb.sh --no-bump --no-publish   # gera o .deb da versão atual
+./build_kiwiscribe_deb.sh                          # bump patch + gera .deb + publica Release
+./build_kiwiscribe_deb.sh minor                    # bump minor + publica
+./build_kiwiscribe_deb.sh --no-bump                # empacota a versão atual e publica
+```
+
+Esse fluxo:
+
+- prepara um CPython 3.13 embutido via ‘uv’ (o Python do sistema no Ubuntu/Pop 24.04 é 3.12);
+- instala as dependências de ‘requirements_installer.txt’ no runtime empacotado;
+- monta o pacote em ‘/opt/kiwiscribe’ com atalho em ‘/usr/bin/kiwiscribe’ e entrada no menu;
+- gera ‘build/deb/Kiwiscribe_<versão>_<arch>.deb’;
+- opcionalmente anexa o ‘.deb’ à Release GitHub ‘v\<versão\>’ (ou cria a Release se ainda não existir).
+
+Pré-requisitos:
+
+- ‘uv’ instalado ([docs.astral.sh/uv](https://docs.astral.sh/uv/));
+- ‘dpkg-deb’ (pacote ‘dpkg’);
+- para publicar: GitHub CLI (‘gh auth login’).
+
+Instalação no Pop!_OS / Ubuntu:
+
+```bash
+sudo apt install ./build/deb/Kiwiscribe_<versão>_amd64.deb
+```
+
+Depois abra pelo menu de aplicativos ou rode ‘kiwiscribe’.
+
+## Atualizações automáticas
+
+No startup, o Kiwiscribe consulta a última Release em GitHub (no máximo 1x por dia). Se houver versão mais nova:
+
+- no Windows, oferece baixar e executar o instalador ‘.exe’;
+- no Linux, baixa o ‘.deb’ e instala com ‘pkexec’ + ‘apt’ (substitui o pacote do menu de aplicativos).
+
+Estado da verificação: ‘~/.local/share/Kiwiscribe/update_check.json’ (Linux) ou ‘%LOCALAPPDATA%\Kiwiscribe\update_check.json’ (Windows).
 
 ## Versionamento
 

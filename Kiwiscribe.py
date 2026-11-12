@@ -17,10 +17,18 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
                              QLabel, QLineEdit, QPushButton, QCheckBox, QTextEdit,
                              QFileDialog, QTableWidget, QTableWidgetItem, QHeaderView,
                              QDialog, QVBoxLayout as QVBoxLayoutDialog, QRadioButton,
-                             QMessageBox, QComboBox)
+                             QMessageBox, QComboBox, QProgressDialog)
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject
 from PyQt6.QtGui import QBrush, QColor, QPixmap, QIcon
 from kiwiscribe_splash import SPLASH_GIF_FILENAME, finish_splash_screen, show_splash_screen
+from kiwiscribe_updates import (
+    DebInstallThread,
+    GITHUB_RELEASES_PAGE,
+    InstallerDownloadThread,
+    UpdateCheckThread,
+    launch_downloaded_installer,
+    should_check_for_updates_today,
+)
 import openai
 from openai import OpenAI
 import google.genai as genai # Import simplificado para Gemini
@@ -32,6 +40,7 @@ except Exception:
     generate_word_document = None
     DOCX_GENERATOR_AVAILABLE = False
 
+APP_NAME = "Kiwiscribe"
 APP_VERSION = "1.0.12"
 
 TRANSCRIPTION_MODELS = {
@@ -2051,6 +2060,11 @@ class TranscriptionWindow(QMainWindow):
         self._last_transcription_provider = None
         self._last_post_provider = None
         self._startup_loading = False
+        self.update_thread = None
+        self.download_thread = None
+        self.install_thread = None
+        self.download_progress = None
+        self._pending_installer = ""
         self.remote_models_ready.connect(self._apply_remote_models)
 
         # --- Conectar sinais aos slots --- MODIFICADO
@@ -2105,6 +2119,203 @@ class TranscriptionWindow(QMainWindow):
         self._last_post_provider = self._current_post_provider()
         # As APIs de modelos podem levar até o timeout; buscar fora da thread da UI.
         self._refresh_model_combos_async()
+        # Verifica atualizações depois que a UI estabiliza (no máximo 1x por dia).
+        QTimer.singleShot(1200, self.schedule_update_check)
+
+    def schedule_update_check(self):
+        if not should_check_for_updates_today():
+            return
+        self.update_thread = UpdateCheckThread(APP_VERSION)
+        self.update_thread.update_available.connect(self.on_update_available)
+        self.update_thread.check_failed.connect(self.on_update_check_failed)
+        self.update_thread.start()
+
+    def on_update_check_failed(self, message: str):
+        self.update_message_box(f"ℹ️ {message}")
+
+    def on_update_available(self, remote_version: str, filename: str, download_url: str):
+        self.update_message_box(
+            f"ℹ️ Nova versão disponível: {remote_version} (atual: {APP_VERSION})."
+        )
+        if sys.platform.startswith("linux"):
+            action = (
+                "Deseja baixar e instalar agora?\n"
+                "O sistema pede a senha de administrador para substituir "
+                "a versão aberta pelo menu de aplicativos."
+            )
+        else:
+            action = "Deseja baixar e executar o instalador agora?"
+        reply = QMessageBox.question(
+            self,
+            "Atualização disponível",
+            (
+                f"Há uma nova versão do {APP_NAME}.\n\n"
+                f"Versão instalada: {APP_VERSION}\n"
+                f"Versão disponível: {remote_version}\n\n"
+                f"{action}\n"
+                f"(Também disponível em {GITHUB_RELEASES_PAGE})"
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            self.update_message_box("ℹ️ Atualização adiada pelo usuário.")
+            return
+
+        self.download_progress = QProgressDialog(
+            f"Baixando {filename}...",
+            "Cancelar",
+            0,
+            100,
+            self,
+        )
+        self.download_progress.setWindowTitle("Download do instalador")
+        self.download_progress.setWindowModality(Qt.WindowModality.WindowModal)
+        self.download_progress.setMinimumDuration(0)
+        self.download_progress.setValue(0)
+        self.download_progress.canceled.connect(self.on_download_canceled)
+
+        self.download_thread = InstallerDownloadThread(download_url, filename, APP_VERSION)
+        self.download_thread.progress.connect(self.on_download_progress)
+        self.download_thread.finished_ok.connect(self.on_download_finished)
+        self.download_thread.failed.connect(self.on_download_failed)
+        self.download_thread.start()
+
+    def on_download_progress(self, percent: int):
+        if not self.download_progress:
+            return
+        if percent < 0:
+            self.download_progress.setRange(0, 0)
+        else:
+            if self.download_progress.maximum() == 0:
+                self.download_progress.setRange(0, 100)
+            self.download_progress.setValue(percent)
+
+    def on_download_canceled(self):
+        if self.download_thread and self.download_thread.isRunning():
+            self.download_thread.terminate()
+            self.download_thread.wait(2000)
+        self.update_message_box("ℹ️ Download do instalador cancelado.")
+
+    def on_download_failed(self, message: str):
+        if self.download_progress:
+            self.download_progress.close()
+            self.download_progress = None
+        self.update_message_box(f"❌ Falha no download do instalador: {message}")
+        QMessageBox.warning(
+            self,
+            "Falha no download",
+            (
+                f"Não foi possível baixar o instalador:\n{message}\n\n"
+                f"Baixe manualmente em:\n{GITHUB_RELEASES_PAGE}"
+            ),
+        )
+
+    def on_download_finished(self, installer_path: str):
+        if self.download_progress:
+            self.download_progress.close()
+            self.download_progress = None
+        self.update_message_box(f"ℹ️ Instalador baixado em: {installer_path}")
+        if sys.platform.startswith("linux") and installer_path.lower().endswith(".deb"):
+            self._start_deb_install(installer_path)
+            return
+        try:
+            launch_downloaded_installer(installer_path)
+        except Exception as exc:
+            QMessageBox.warning(
+                self,
+                "Falha ao abrir instalador",
+                (
+                    f"O arquivo foi baixado, mas não foi possível abri-lo:\n{exc}\n\n"
+                    f"Abra manualmente:\n{installer_path}"
+                ),
+            )
+            return
+
+        quit_reply = QMessageBox.question(
+            self,
+            "Instalador iniciado",
+            (
+                "O instalador foi iniciado.\n\n"
+                "Recomenda-se fechar o Kiwiscribe antes de concluir a instalação.\n"
+                "Deseja fechar o aplicativo agora?"
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if quit_reply == QMessageBox.StandardButton.Yes:
+            self.close()
+
+    def _start_deb_install(self, installer_path: str):
+        self.download_progress = QProgressDialog(
+            "Instalando a atualização…\n"
+            "Confirme a senha de administrador se o sistema solicitar.",
+            "",
+            0,
+            0,
+            self,
+        )
+        self.download_progress.setWindowTitle("Instalando atualização")
+        self.download_progress.setWindowModality(Qt.WindowModality.WindowModal)
+        self.download_progress.setMinimumDuration(0)
+        self.download_progress.setCancelButton(None)
+        self.download_progress.show()
+        self._pending_installer = installer_path
+        self.install_thread = DebInstallThread(installer_path)
+        self.install_thread.succeeded.connect(self.on_deb_install_finished)
+        self.install_thread.failed.connect(self.on_deb_install_failed)
+        self.install_thread.start()
+
+    def on_deb_install_finished(self, had_shadow: bool):
+        if self.download_progress:
+            self.download_progress.close()
+            self.download_progress = None
+        if had_shadow:
+            detail = (
+                "O atalho antigo da sua pasta de usuário foi removido. "
+                "Ele fazia o menu de aplicativos abrir a versão anterior."
+            )
+        else:
+            detail = "A versão aberta pelo menu de aplicativos foi substituída."
+        self.update_message_box("ℹ️ Atualização instalada.")
+        quit_reply = QMessageBox.question(
+            self,
+            "Atualização instalada",
+            (
+                "A nova versão foi instalada.\n\n"
+                f"{detail}\n\n"
+                "Para usar essa versão, feche o Kiwiscribe e abra de novo pelo menu.\n"
+                "Deseja fechar agora?"
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if quit_reply == QMessageBox.StandardButton.Yes:
+            self.close()
+
+    def on_deb_install_failed(self, message: str, cancelled: bool):
+        if self.download_progress:
+            self.download_progress.close()
+            self.download_progress = None
+        if cancelled:
+            self.update_message_box("ℹ️ Instalação da atualização cancelada.")
+            return
+        self.update_message_box(f"❌ Falha ao instalar a atualização: {message}")
+        downloaded = getattr(self, "_pending_installer", "")
+        manual = (
+            f"\n\nPara instalar o arquivo já baixado:\nsudo apt install {downloaded}"
+            if downloaded
+            else ""
+        )
+        QMessageBox.warning(
+            self,
+            "Falha na instalação",
+            (
+                f"O pacote foi baixado, mas não foi instalado:\n{message}"
+                f"{manual}\n\n"
+                f"Você também pode baixar o instalador em:\n{GITHUB_RELEASES_PAGE}"
+            ),
+        )
 
     def _on_speaker_identification_toggled(self, state):
         """Ao marcar Speaker Identification, seleciona automaticamente 'Nenhum (Apenas Transcrever)' no pós-processamento."""

@@ -1,0 +1,63 @@
+#!/bin/sh
+set -e
+
+# Uma cópia antiga em ~/.local/share/applications esconde o atalho do sistema
+# no menu (Pop!_OS / COSMIC). Só removemos o atalho que ainda aponta para
+# ~/.local/opt ou ~/.local/bin, deixando um atalho personalizado intacto.
+retire_shadow_for_home() {
+    home="$1"
+    desktop="$home/.local/share/applications/kiwiscribe.desktop"
+    [ -f "$desktop" ] || return 0
+    if ! grep -Eq '/\.local/(bin|opt)/kiwiscribe' "$desktop"; then
+        return 0
+    fi
+
+    rm -f "$desktop"
+
+    launcher="$home/.local/bin/kiwiscribe"
+    if [ -f "$launcher" ] && grep -q '/\.local/opt/kiwiscribe' "$launcher"; then
+        rm -f "$launcher"
+    fi
+
+    if [ -f "$home/.local/opt/kiwiscribe/Kiwiscribe.py" ] \
+        || [ -f "$home/.local/opt/kiwiscribe/kiwiscribe_launcher.py" ]; then
+        rm -rf "$home/.local/opt/kiwiscribe"
+    fi
+
+    if [ -d "$home/.local/share/icons" ]; then
+        find "$home/.local/share/icons" -type f -path '*/apps/kiwiscribe.png' -delete || true
+    fi
+
+    if command -v update-desktop-database >/dev/null 2>&1; then
+        update-desktop-database -q "$home/.local/share/applications" || true
+    fi
+    if command -v gtk-update-icon-cache >/dev/null 2>&1 && [ -d "$home/.local/share/icons/hicolor" ]; then
+        gtk-update-icon-cache -f -t "$home/.local/share/icons/hicolor" >/dev/null 2>&1 || true
+    fi
+}
+
+retire_user_local_shadows() {
+    if ! command -v getent >/dev/null 2>&1; then
+        return 0
+    fi
+    getent passwd | while IFS=: read -r _user _pass uid _gid _gecos home _shell; do
+        case "$uid" in
+            ''|*[!0-9]*) continue ;;
+        esac
+        if [ "$uid" -ge 1000 ] && [ -d "$home" ]; then
+            retire_shadow_for_home "$home"
+        fi
+    done
+}
+
+if [ "$1" = "configure" ]; then
+    if command -v update-desktop-database >/dev/null 2>&1; then
+        update-desktop-database -q /usr/share/applications || true
+    fi
+    if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+        gtk-update-icon-cache -f -t /usr/share/icons/hicolor >/dev/null 2>&1 || true
+    fi
+    retire_user_local_shadows
+fi
+
+exit 0

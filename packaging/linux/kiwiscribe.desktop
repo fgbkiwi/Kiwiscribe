@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Kiwiscribe
+GenericName=Transcrição de audiências
+Comment=Transcrição e pós-processamento de audiências trabalhistas
+Exec=/usr/bin/kiwiscribe
+Icon=kiwiscribe
+Terminal=false
+Categories=Office;
+Keywords=transcrição;audiência;trabalhista;DOCX;
+StartupNotify=true
+StartupWMClass=kiwiscribe

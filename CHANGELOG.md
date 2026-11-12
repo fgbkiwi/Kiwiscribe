@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Linux: adicionado `build_kiwiscribe_deb.sh` e `packaging/linux/` para gerar instalador
+  `.deb` (Pop!_OS / Ubuntu), no mesmo papel do `build_installer.bat` no Windows — CPython
+  3.13 embutido via `uv`, atalho no menu e publicação opcional na Release GitHub.
+- Atualizações: verificação automática de versão mais nova no startup (no máximo 1x/dia)
+  via GitHub Releases (`kiwiscribe_updates.py`); no Linux instala o `.deb` com
+  `pkexec`+`apt`, no Windows abre o instalador `.exe`.
+- Instalador Windows: inclui `kiwiscribe_updates.py` no pacote pynsist.
+
 - Correção: o pós-processamento deixava de ser executado em re-execuções (especialmente
   no modo "Apenas Pós-processar") porque a escolha do pós-processador era lida dos
   `QRadioButton` dentro do thread de trabalho, retornando estado obsoleto. A seleção
